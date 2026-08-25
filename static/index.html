@@ -147,6 +147,10 @@
   .mode-btn { flex: 1; padding: 7px 8px; border-radius: 6px; border: none; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600; cursor: pointer; }
   .mode-btn.active { background: #fff; color: var(--navy); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 
+  .depth-toggle { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; cursor: pointer; }
+  .depth-toggle input { width: auto; margin: 0; }
+  .depth-hint { margin-top: 2px; margin-bottom: 16px; }
+
   .compare-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #fbfcfd; position: relative; }
   .compare-row-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
   .compare-row-title { font-size: 12px; font-weight: 700; color: var(--navy); flex: 1; }
@@ -186,6 +190,12 @@
       <button type="button" class="mode-btn active" id="mode-single-btn">Single route</button>
       <button type="button" class="mode-btn" id="mode-compare-btn">Compare routes</button>
     </div>
+
+    <label class="depth-toggle" for="depth-toggle-input">
+      <input type="checkbox" id="depth-toggle-input">
+      <span>Show water depth (GEBCO)</span>
+    </label>
+    <p class="hint depth-hint" style="display:none;">Global bathymetry grid, ~450m resolution. Public domain data from GEBCO — useful for open-ocean context, not detailed enough to trust in shallow coastal water or for anything safety-related.</p>
 
     <div id="single-mode-section">
       <div class="field-group">
@@ -278,6 +288,32 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors',
   maxZoom: 18,
 }).addTo(map);
+
+// --- Water depth overlay (GEBCO WMS) ---------------------------------------
+// GEBCO's grid is public domain, free to use, no API key. gebco_latest_2 is
+// the "flat map" layer colour-coded by elevation/depth -- the closest free
+// equivalent to a Navionics-style depth shading. Not added to the map by
+// default; toggled on via the checkbox in the panel.
+const depthLayer = L.tileLayer.wms('https://wms.gebco.net/mapserv?', {
+  layers: 'gebco_latest_2',
+  format: 'image/jpeg',
+  transparent: false,
+  version: '1.3.0',
+  opacity: 0.55,
+  maxZoom: 18,
+  attribution: 'Imagery reproduced from the GEBCO_2026 Grid, GEBCO Compilation Group',
+});
+const depthToggleInput = document.getElementById('depth-toggle-input');
+const depthHint = document.querySelector('.depth-hint');
+depthToggleInput.addEventListener('change', () => {
+  if (depthToggleInput.checked) {
+    depthLayer.addTo(map);
+    depthHint.style.display = 'block';
+  } else {
+    map.removeLayer(depthLayer);
+    depthHint.style.display = 'none';
+  }
+});
 
 let originPoint = null;      // [lon, lat]
 let destPoint = null;        // [lon, lat]
