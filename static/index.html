@@ -335,12 +335,11 @@ generateBtn.addEventListener('click', async () => {
   generateBtn.disabled = true;
   generateBtn.textContent = 'Routing…';
   try {
-    const res = await fetch('/api/route', {
+    const data = await fetchJsonWithRetry('/api/route', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ origin: originPoint, destination: destPoint }),
     });
-    const data = await res.json();
     drawRoute(data.coordinates);
     if (data.passages_used) {
       passageNote.style.display = 'block';
@@ -351,7 +350,11 @@ generateBtn.addEventListener('click', async () => {
     routeIsDirty = false;
     editHint.style.display = 'none';
     recalcBtn.disabled = false;
-    await recalcStats();
+    try {
+      await recalcStats();
+    } catch (statsErr) {
+      showStatsError(statsErr);
+    }
   } catch (err) {
     alert('Route request failed: ' + err);
   } finally {
@@ -373,7 +376,51 @@ function drawRoute(coords) {
   });
 }
 
-recalcBtn.addEventListener('click', recalcStats);
+recalcBtn.addEventListener('click', async () => {
+  recalcBtn.disabled = true;
+  const originalLabel = recalcBtn.textContent;
+  recalcBtn.textContent = 'Recalculating…';
+  try {
+    await recalcStats();
+  } catch (err) {
+    showStatsError(err);
+  } finally {
+    recalcBtn.disabled = false;
+    recalcBtn.textContent = originalLabel;
+  }
+});
+
+// Fetch a URL and parse it as JSON, retrying once after a short pause if the
+// first attempt fails (covers transient network/proxy hiccups rather than
+// surfacing a raw error to the user immediately).
+async function fetchJsonWithRetry(url, options, retries = 1) {
+  try {
+    const res = await fetch(url, options);
+    if (!res.ok) {
+      let detail = res.statusText || 'Request failed';
+      try {
+        const body = await res.json();
+        detail = body.detail || detail;
+      } catch (_) {
+        // Response wasn't JSON (e.g. a plain-text error page from the
+        // hosting platform) -- fall back to the status text above.
+      }
+      throw new Error(`${res.status} ${detail}`);
+    }
+    return await res.json();
+  } catch (err) {
+    if (retries > 0) {
+      await new Promise(r => setTimeout(r, 800));
+      return fetchJsonWithRetry(url, options, retries - 1);
+    }
+    throw err;
+  }
+}
+
+function showStatsError(err) {
+  document.getElementById('results').innerHTML =
+    '<div id="placeholder">Couldn\'t calculate stats (' + err.message + '). Try Recalculate again.</div>';
+}
 
 async function recalcStats() {
   if (!routeLayer) return;
@@ -395,12 +442,11 @@ async function recalcStats() {
     vessel_day_rate: parseFloat(document.getElementById('vessel-rate').value),
   };
 
-  const res = await fetch('/api/stats', {
+  const s = await fetchJsonWithRetry('/api/stats', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const s = await res.json();
   renderResults(s);
   routeIsDirty = false;
   editHint.style.display = 'none';
