@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CableTrack Routing Tool — Prototype</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/vendor/leaflet.css" />
+<style>
+  :root {
+    --navy: #0b2d4d;
+    --navy-light: #14456f;
+    --accent: #1f8fce;
+    --bg: #f4f6f8;
+    --panel-bg: #ffffff;
+    --border: #dbe2e8;
+    --text: #1c2a33;
+    --muted: #6b7c88;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+  }
+  #app { display: flex; height: 100vh; }
+  #map { flex: 1; }
+  #panel {
+    width: 380px;
+    min-width: 380px;
+    background: var(--panel-bg);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 20px;
+  }
+  h1 {
+    font-size: 17px;
+    margin: 0 0 2px 0;
+    color: var(--navy);
+  }
+  .subtitle {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 0 0 18px 0;
+  }
+  .field-group { margin-bottom: 14px; position: relative; }
+  label {
+    display: block;
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  input[type="text"], input[type="number"] {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13.5px;
+    background: #fff;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .autocomplete-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    max-height: 180px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+  }
+  .autocomplete-item {
+    padding: 7px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .autocomplete-item:hover { background: #eef4f8; }
+  .autocomplete-item .country { color: var(--muted); font-size: 11px; }
+
+  .btn-row { display: flex; gap: 8px; margin: 14px 0; }
+  button {
+    flex: 1;
+    padding: 9px 10px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-primary { background: var(--navy); color: #fff; }
+  .btn-primary:hover { background: var(--navy-light); }
+  .btn-secondary { background: #eef1f4; color: var(--text); }
+  .btn-secondary:hover { background: #e2e7eb; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .section-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--navy);
+    margin: 20px 0 8px 0;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .params-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+
+  .hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: -4px; margin-bottom: 12px; }
+
+  #results { font-size: 13.5px; }
+  .result-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 5px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .result-row.total {
+    font-weight: 700;
+    color: var(--navy);
+    border-bottom: none;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    margin-top: 4px;
+  }
+  .result-row .label { color: var(--muted); }
+  .result-row .value { font-weight: 600; }
+  #passage-note {
+    margin-top: 10px;
+    font-size: 12px;
+    background: #eaf4fb;
+    color: var(--navy-light);
+    padding: 8px 10px;
+    border-radius: 6px;
+    display: none;
+  }
+  #placeholder { color: var(--muted); font-size: 13px; padding: 8px 0; }
+  #edit-hint {
+    display: none;
+    font-size: 12px;
+    color: var(--muted);
+    background: #fff8e6;
+    border: 1px solid #f0dca0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-top: 10px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="map"></div>
+  <div id="panel">
+    <h1>CableTrack Routing Tool</h1>
+    <p class="subtitle">Prototype — planning/estimation only, not for navigation</p>
+
+    <div class="field-group">
+      <label for="origin-input">Start point</label>
+      <input type="text" id="origin-input" placeholder="Search a port, or click the map">
+      <div id="origin-list" class="autocomplete-list" style="display:none;"></div>
+    </div>
+    <div class="field-group">
+      <label for="dest-input">Destination</label>
+      <input type="text" id="dest-input" placeholder="Search a port, or click the map">
+      <div id="dest-list" class="autocomplete-list" style="display:none;"></div>
+    </div>
+    <p class="hint">Click the map to set points directly: first click = start, second click = destination. Once a route is drawn, drag its vertices (or click the line to add one) to correct it.</p>
+
+    <div class="btn-row">
+      <button class="btn-primary" id="generate-btn" disabled>Generate route</button>
+      <button class="btn-secondary" id="reset-btn">Reset</button>
+    </div>
+    <div id="edit-hint">Route edited — click Recalculate to update the figures below.</div>
+
+    <div class="section-title">Speed zones (knots)</div>
+    <div class="params-grid">
+      <div class="field-group"><label>Port</label><input type="number" id="port-speed" value="5" step="0.5"></div>
+      <div class="field-group"><label>Approach</label><input type="number" id="approach-speed" value="7" step="0.5"></div>
+      <div class="field-group"><label>Open sea</label><input type="number" id="open-speed" value="12" step="0.5"></div>
+      <div class="field-group"><label>Weather allowance %</label><input type="number" id="allowance" value="10" step="1"></div>
+    </div>
+    <div class="section-title">Zone radius (nm from start/end)</div>
+    <div class="params-grid">
+      <div class="field-group"><label>Port zone ≤</label><input type="number" id="port-radius" value="3" step="0.5"></div>
+      <div class="field-group"><label>Approach zone ≤</label><input type="number" id="approach-radius" value="15" step="0.5"></div>
+    </div>
+
+    <div class="section-title">Route, current &amp; weather assumptions</div>
+    <p class="hint">These are user-supplied assumptions, not live data — no ocean-current or weather feed is wired up in this prototype. See the note under Result.</p>
+    <div class="params-grid">
+      <div class="field-group"><label>Track allowance %</label><input type="number" id="distance-allowance" value="3" step="0.5"></div>
+      <div class="field-group"><label>Current factor %</label><input type="number" id="current-factor" value="0" step="0.5"></div>
+    </div>
+
+    <div class="section-title">Fuel &amp; vessel cost</div>
+    <div class="params-grid">
+      <div class="field-group"><label>Fuel burn (t/day)</label><input type="number" id="fuel-burn" value="8.5" step="0.1"></div>
+      <div class="field-group"><label>Fuel price (£/t)</label><input type="number" id="fuel-price" value="620" step="10"></div>
+      <div class="field-group"><label>Vessel day rate (£/day)</label><input type="number" id="vessel-rate" value="12000" step="500"></div>
+    </div>
+
+    <button class="btn-primary" id="recalc-btn" style="width:100%; margin-top: 4px;" disabled>Recalculate</button>
+
+    <div class="section-title">Result</div>
+    <div id="results">
+      <div id="placeholder">Set a start point and destination to generate a route.</div>
+    </div>
+    <div id="passage-note"></div>
+  </div>
+</div>
+
+<script src="/vendor/leaflet.js"></script>
+<script src="/vendor/leaflet-editable.js"></script>
+<script>
+// Leaflet's default marker icon paths break when the JS is loaded as a plain
+// script rather than bundled; point them explicitly at the vendored images.
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: '/vendor/images/marker-icon-2x.png',
+  iconUrl: '/vendor/images/marker-icon.png',
+  shadowUrl: '/vendor/images/marker-shadow.png',
+});
+// L.Icon.Default._getIconUrl always prepends its own detected imagePath on
+// top of whatever iconUrl/shadowUrl are set above -- mergeOptions alone
+// left the path doubled (/vendor/images//vendor/images/...). Pin the
+// detected imagePath to empty so it isn't prepended a second time.
+L.Icon.Default.imagePath = '';
+
+const map = L.map('map', { editable: true, editOptions: {} }).setView([35, 10], 3);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
+  maxZoom: 18,
+}).addTo(map);
+
+let originPoint = null;      // [lon, lat]
+let destPoint = null;        // [lon, lat]
+let originMarker = null;
+let destMarker = null;
+let routeLayer = null;
+let routeIsDirty = false;
+
+const originInput = document.getElementById('origin-input');
+const destInput = document.getElementById('dest-input');
+const originList = document.getElementById('origin-list');
+const destList = document.getElementById('dest-list');
+const generateBtn = document.getElementById('generate-btn');
+const recalcBtn = document.getElementById('recalc-btn');
+const resetBtn = document.getElementById('reset-btn');
+const editHint = document.getElementById('edit-hint');
+const passageNote = document.getElementById('passage-note');
+
+function setOrigin(lonlat, label) {
+  originPoint = lonlat;
+  if (originMarker) map.removeLayer(originMarker);
+  originMarker = L.marker([lonlat[1], lonlat[0]], { title: 'Start' }).addTo(map)
+    .bindTooltip(label || 'Start', { permanent: false });
+  originInput.value = label || `${lonlat[1].toFixed(3)}, ${lonlat[0].toFixed(3)}`;
+  updateGenerateEnabled();
+}
+
+function setDest(lonlat, label) {
+  destPoint = lonlat;
+  if (destMarker) map.removeLayer(destMarker);
+  destMarker = L.marker([lonlat[1], lonlat[0]], { title: 'Destination' }).addTo(map)
+    .bindTooltip(label || 'Destination', { permanent: false });
+  destInput.value = label || `${lonlat[1].toFixed(3)}, ${lonlat[0].toFixed(3)}`;
+  updateGenerateEnabled();
+}
+
+function updateGenerateEnabled() {
+  generateBtn.disabled = !(originPoint && destPoint);
+}
+
+map.on('click', (e) => {
+  const lonlat = [e.latlng.lng, e.latlng.lat];
+  if (!originPoint) {
+    setOrigin(lonlat, null);
+  } else if (!destPoint) {
+    setDest(lonlat, null);
+  }
+});
+
+resetBtn.addEventListener('click', () => {
+  originPoint = null; destPoint = null;
+  if (originMarker) map.removeLayer(originMarker);
+  if (destMarker) map.removeLayer(destMarker);
+  if (routeLayer) map.removeLayer(routeLayer);
+  originMarker = destMarker = routeLayer = null;
+  originInput.value = ''; destInput.value = '';
+  updateGenerateEnabled();
+  recalcBtn.disabled = true;
+  editHint.style.display = 'none';
+  passageNote.style.display = 'none';
+  document.getElementById('results').innerHTML = '<div id="placeholder">Set a start point and destination to generate a route.</div>';
+});
+
+// --- Port search autocomplete -------------------------------------------
+function wireAutocomplete(input, listEl, onPick) {
+  let timer = null;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 2) { listEl.style.display = 'none'; return; }
+    timer = setTimeout(async () => {
+      const res = await fetch(`/api/ports/search?q=${encodeURIComponent(q)}`);
+      const ports = await res.json();
+      if (!ports.length) { listEl.style.display = 'none'; return; }
+      listEl.innerHTML = ports.map((p, i) =>
+        `<div class="autocomplete-item" data-i="${i}">${p.name} <span class="country">— ${p.country || ''}</span></div>`
+      ).join('');
+      listEl.style.display = 'block';
+      [...listEl.children].forEach((el, i) => {
+        el.addEventListener('click', () => {
+          const p = ports[i];
+          onPick([p.lon, p.lat], p.name);
+          listEl.style.display = 'none';
+        });
+      });
+    }, 200);
+  });
+  document.addEventListener('click', (e) => {
+    if (e.target !== input) listEl.style.display = 'none';
+  });
+}
+wireAutocomplete(originInput, originList, setOrigin);
+wireAutocomplete(destInput, destList, setDest);
+
+// --- Route generation -----------------------------------------------------
+generateBtn.addEventListener('click', async () => {
+  generateBtn.disabled = true;
+  generateBtn.textContent = 'Routing…';
+  try {
+    const res = await fetch('/api/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ origin: originPoint, destination: destPoint }),
+    });
+    const data = await res.json();
+    drawRoute(data.coordinates);
+    if (data.passages_used) {
+      passageNote.style.display = 'block';
+      passageNote.textContent = `Route uses: ${[].concat(data.passages_used).join(', ')}`;
+    } else {
+      passageNote.style.display = 'none';
+    }
+    routeIsDirty = false;
+    editHint.style.display = 'none';
+    recalcBtn.disabled = false;
+    await recalcStats();
+  } catch (err) {
+    alert('Route request failed: ' + err);
+  } finally {
+    generateBtn.disabled = false;
+    generateBtn.textContent = 'Generate route';
+  }
+});
+
+function drawRoute(coords) {
+  if (routeLayer) map.removeLayer(routeLayer);
+  const latlngs = coords.map(c => [c[1], c[0]]);
+  routeLayer = L.polyline(latlngs, { color: '#1f8fce', weight: 3 }).addTo(map);
+  routeLayer.enableEdit();
+  map.fitBounds(routeLayer.getBounds(), { padding: [30, 30] });
+
+  routeLayer.on('editable:vertex:dragend editable:vertex:new editable:vertex:deleted', () => {
+    routeIsDirty = true;
+    editHint.style.display = 'block';
+  });
+}
+
+recalcBtn.addEventListener('click', recalcStats);
+
+async function recalcStats() {
+  if (!routeLayer) return;
+  const latlngs = routeLayer.getLatLngs();
+  const coords = latlngs.map(ll => [ll.lng, ll.lat]);
+
+  const payload = {
+    coordinates: coords,
+    port_speed_kn: parseFloat(document.getElementById('port-speed').value),
+    approach_speed_kn: parseFloat(document.getElementById('approach-speed').value),
+    open_sea_speed_kn: parseFloat(document.getElementById('open-speed').value),
+    port_radius_nm: parseFloat(document.getElementById('port-radius').value),
+    approach_radius_nm: parseFloat(document.getElementById('approach-radius').value),
+    weather_allowance_pct: parseFloat(document.getElementById('allowance').value),
+    distance_allowance_pct: parseFloat(document.getElementById('distance-allowance').value),
+    current_factor_pct: parseFloat(document.getElementById('current-factor').value),
+    fuel_burn_t_per_day: parseFloat(document.getElementById('fuel-burn').value),
+    fuel_price_per_t: parseFloat(document.getElementById('fuel-price').value),
+    vessel_day_rate: parseFloat(document.getElementById('vessel-rate').value),
+  };
+
+  const res = await fetch('/api/stats', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const s = await res.json();
+  renderResults(s);
+  routeIsDirty = false;
+  editHint.style.display = 'none';
+}
+
+function renderResults(s) {
+  const z = s.zones;
+  document.getElementById('results').innerHTML = `
+    <div class="result-row"><span class="label">Route (geometric)</span><span class="value">${s.total_distance_nm} nm</span></div>
+    <div class="result-row total"><span class="label">Effective distance (+${s.distance_allowance_pct}% track allowance)</span><span class="value">${s.effective_distance_nm} nm</span></div>
+    <div class="result-row"><span class="label">Open-sea</span><span class="value">${z.open_sea.distance_nm} nm @ ${z.open_sea.effective_speed_kn} kn</span></div>
+    <div class="result-row"><span class="label">Approach</span><span class="value">${z.approach.distance_nm} nm @ ${z.approach.effective_speed_kn} kn</span></div>
+    <div class="result-row"><span class="label">Port</span><span class="value">${z.port.distance_nm} nm @ ${z.port.effective_speed_kn} kn</span></div>
+    <div class="result-row"><span class="label">Current factor</span><span class="value">${s.current_factor_pct >= 0 ? '+' : ''}${s.current_factor_pct}% (speed)</span></div>
+    <div class="result-row"><span class="label">Transit</span><span class="value">${s.transit_hm}</span></div>
+    <div class="result-row"><span class="label">Weather allowance</span><span class="value">${s.weather_allowance_pct}%</span></div>
+    <div class="result-row total"><span class="label">Planning transit</span><span class="value">${s.planning_transit_hm} (${s.planning_transit_days} days)</span></div>
+    <div class="result-row"><span class="label">Fuel burn</span><span class="value">${s.fuel_burn_t_per_day} t/day</span></div>
+    <div class="result-row"><span class="label">Fuel required</span><span class="value">${s.fuel_required_t} t</span></div>
+    <div class="result-row"><span class="label">Fuel price</span><span class="value">£${s.fuel_price_per_t}/t</span></div>
+    <div class="result-row"><span class="label">Fuel cost</span><span class="value">£${s.fuel_cost.toLocaleString()}</span></div>
+    <div class="result-row"><span class="label">Vessel day rate</span><span class="value">£${s.vessel_day_rate.toLocaleString()}/day</span></div>
+    <div class="result-row"><span class="label">Vessel cost</span><span class="value">£${s.vessel_cost.toLocaleString()}</span></div>
+    <div class="result-row total"><span class="label">Total transit cost</span><span class="value">£${s.total_cost.toLocaleString()}</span></div>
+  `;
+}
+</script>
+</body>
+</html>
