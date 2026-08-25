@@ -150,6 +150,8 @@
   .depth-toggle { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; cursor: pointer; }
   .depth-toggle input { width: auto; margin: 0; }
   .depth-hint { margin-top: 2px; margin-bottom: 16px; }
+  .tide-info { font-size: 11.5px; color: var(--muted); margin-top: 5px; line-height: 1.4; }
+  .tide-info.error { color: #c0392b; }
 
   .compare-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #fbfcfd; position: relative; }
   .compare-row-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
@@ -202,11 +204,13 @@
         <label for="origin-input">Start point</label>
         <input type="text" id="origin-input" placeholder="Search a port, or click the map">
         <div id="origin-list" class="autocomplete-list" style="display:none;"></div>
+        <div id="origin-tide" class="tide-info" style="display:none;"></div>
       </div>
       <div class="field-group">
         <label for="dest-input">Destination</label>
         <input type="text" id="dest-input" placeholder="Search a port, or click the map">
         <div id="dest-list" class="autocomplete-list" style="display:none;"></div>
+        <div id="dest-tide" class="tide-info" style="display:none;"></div>
       </div>
       <p class="hint">Click the map to set points directly: first click = start, second click = destination. Once a route is drawn, drag its vertices (or click the line to add one) to correct it.</p>
 
@@ -331,6 +335,38 @@ const recalcBtn = document.getElementById('recalc-btn');
 const resetBtn = document.getElementById('reset-btn');
 const editHint = document.getElementById('edit-hint');
 const passageNote = document.getElementById('passage-note');
+const originTideEl = document.getElementById('origin-tide');
+const destTideEl = document.getElementById('dest-tide');
+
+// --- Tidal range (TideCheck) ------------------------------------------
+// Planning-only context alongside the water-depth overlay -- not live
+// navigation data. The API key lives server-side; this just calls our own
+// /api/tides endpoint. No retry here (unlike route/stats calls) since the
+// free tier is a tight 50 requests/day and the backend already caches per
+// rounded coordinate, so a flaky request is cheap to just show as "unavailable"
+// rather than spend a second call retrying it.
+async function fetchTideInfo(lonlat, targetEl) {
+  targetEl.style.display = 'block';
+  targetEl.classList.remove('error');
+  targetEl.textContent = 'Loading tidal range…';
+  try {
+    const data = await fetchJsonWithRetry('/api/tides', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: lonlat[1], lon: lonlat[0] }),
+    }, 0);
+    if (data.error) {
+      targetEl.textContent = data.error;
+      targetEl.classList.add('error');
+      return;
+    }
+    const range = data.tidal_range_m != null ? `${data.tidal_range_m}m` : 'n/a';
+    targetEl.textContent = `Tidal range: ${range} (nearest station: ${data.station_name}, ${data.station_distance_km}km away) — planning only, not for navigation`;
+  } catch (err) {
+    targetEl.textContent = 'Tidal range unavailable right now.';
+    targetEl.classList.add('error');
+  }
+}
 
 function setOrigin(lonlat, label) {
   originPoint = lonlat;
@@ -339,6 +375,7 @@ function setOrigin(lonlat, label) {
     .bindTooltip(label || 'Start', { permanent: false });
   originInput.value = label || `${lonlat[1].toFixed(3)}, ${lonlat[0].toFixed(3)}`;
   updateGenerateEnabled();
+  fetchTideInfo(lonlat, originTideEl);
 }
 
 function setDest(lonlat, label) {
@@ -348,6 +385,7 @@ function setDest(lonlat, label) {
     .bindTooltip(label || 'Destination', { permanent: false });
   destInput.value = label || `${lonlat[1].toFixed(3)}, ${lonlat[0].toFixed(3)}`;
   updateGenerateEnabled();
+  fetchTideInfo(lonlat, destTideEl);
 }
 
 function updateGenerateEnabled() {
@@ -370,6 +408,8 @@ resetBtn.addEventListener('click', () => {
   if (routeLayer) map.removeLayer(routeLayer);
   originMarker = destMarker = routeLayer = null;
   originInput.value = ''; destInput.value = '';
+  originTideEl.style.display = 'none';
+  destTideEl.style.display = 'none';
   updateGenerateEnabled();
   recalcBtn.disabled = true;
   editHint.style.display = 'none';
@@ -455,6 +495,15 @@ function drawRoute(coords) {
 }
 
 recalcBtn.addEventListener('click', async () => {
+  // In compare mode this button has no route of its own to recalc against
+  // -- "recalculate" there means "re-run the comparison with the current
+  // param values", which is exactly what the Compare routes button already
+  // does (it reads the speed/zone/rate fields fresh on every click). So
+  // just trigger that instead of duplicating its logic.
+  if (compareModeSection.style.display !== 'none') {
+    if (!compareBtn.disabled) compareBtn.click();
+    return;
+  }
   recalcBtn.disabled = true;
   const originalLabel = recalcBtn.textContent;
   recalcBtn.textContent = 'Recalculating…';
@@ -595,6 +644,26 @@ function setMode(mode) {
     clearCompareLayers();
     if (routeLayer) { routeLayer.addTo(map); }
   }
+  syncRecalcButton();
+}
+
+// The Recalculate button is shared by both modes (it sits below the speed/
+// zone/cost fields, which are shared too). In single mode it re-runs
+// /api/stats against the already-drawn route; in compare mode there's no
+// separate "recalc" concept -- changing a shared param and wanting fresh
+// numbers just means re-running the comparison, so it delegates to the
+// Compare routes button. Previously this button stayed disabled the whole
+// time you were in compare mode (its enabled state was only ever set by the
+// single-mode Generate flow), which looked like changing speeds/zones/rates
+// "wouldn't let you recalculate" -- fixed by keeping it in sync with mode.
+function syncRecalcButton() {
+  const isCompare = compareModeSection.style.display !== 'none';
+  if (isCompare) {
+    const readyCount = compareRows.filter(r => r.originPoint && r.destPoint).length;
+    recalcBtn.disabled = readyCount < 1;
+  } else {
+    recalcBtn.disabled = !routeLayer;
+  }
 }
 modeSingleBtn.addEventListener('click', () => setMode('single'));
 modeCompareBtn.addEventListener('click', () => setMode('compare'));
@@ -674,6 +743,7 @@ function updateCompareControls() {
   const readyCount = compareRows.filter(r => r.originPoint && r.destPoint).length;
   compareBtn.disabled = readyCount < 1;
   compareBtn.textContent = readyCount > 0 ? `Compare ${readyCount} route${readyCount > 1 ? 's' : ''}` : 'Compare routes';
+  syncRecalcButton();
 }
 
 addRouteBtn.addEventListener('click', addCompareRow);
@@ -753,6 +823,21 @@ function renderCompareTable() {
     compareResultsWrap.innerHTML = '<div class="placeholder-text">Add at least one route above, then click Compare routes.</div>';
     return;
   }
+
+  // % vs baseline -- baseline is "the first route" (Route 1's position in
+  // the list as added, not wherever it lands after sorting), per cost. If
+  // Route 1 itself failed to calculate, fall back to the first route that
+  // did succeed so the column still means something.
+  const baseline = compareResultsData.find(r => r.ok);
+  compareResultsData.forEach(r => {
+    if (r.ok && baseline) {
+      r.is_baseline = r.id === baseline.id;
+      r.cost_diff_pct = baseline.total_cost
+        ? ((r.total_cost - baseline.total_cost) / baseline.total_cost) * 100
+        : 0;
+    }
+  });
+
   const okRows = compareResultsData.filter(r => r.ok);
   const errRows = compareResultsData.filter(r => !r.ok);
   okRows.sort((a, b) => {
@@ -769,6 +854,7 @@ function renderCompareTable() {
     { key: 'distance_nm', label: 'Distance' },
     { key: 'transit_days', label: 'Transit' },
     { key: 'total_cost', label: 'Total cost' },
+    { key: 'cost_diff_pct', label: '% vs Route 1' },
   ];
 
   const summary = errRows.length
@@ -792,12 +878,13 @@ function renderCompareTable() {
             <td>${r.distance_nm} nm</td>
             <td>${r.transit_hm}</td>
             <td>£${r.total_cost.toLocaleString()}</td>
+            <td>${r.is_baseline ? 'Baseline' : `${r.cost_diff_pct >= 0 ? '+' : ''}${r.cost_diff_pct.toFixed(1)}%`}</td>
           </tr>
         ` : `
           <tr class="compare-row-error">
             <td><span class="color-dot" style="background:${r.color}"></span></td>
             <td>${r.label}</td>
-            <td colspan="3">Failed: ${r.error}</td>
+            <td colspan="4">Failed: ${r.error}</td>
           </tr>
         `).join('')}
       </tbody>
