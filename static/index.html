@@ -141,6 +141,28 @@
     display: none;
   }
   #placeholder { color: var(--muted); font-size: 13px; padding: 8px 0; }
+  .placeholder-text { color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+  .mode-toggle { display: flex; gap: 6px; margin-bottom: 16px; background: #eef1f4; border-radius: 8px; padding: 4px; }
+  .mode-btn { flex: 1; padding: 7px 8px; border-radius: 6px; border: none; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+  .mode-btn.active { background: #fff; color: var(--navy); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+
+  .compare-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #fbfcfd; position: relative; }
+  .compare-row-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .compare-row-title { font-size: 12px; font-weight: 700; color: var(--navy); flex: 1; }
+  .color-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .remove-row-btn { flex: none; background: none; border: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  .remove-row-btn:hover { color: #c0392b; }
+  .compare-row .field-group { margin-bottom: 8px; }
+  .compare-row .field-group:last-child { margin-bottom: 0; }
+
+  .compare-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .compare-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); padding: 6px 4px; border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; white-space: nowrap; }
+  .compare-table th:hover { color: var(--navy); }
+  .compare-table th.sorted::after { content: ' \25BE'; }
+  .compare-table td { padding: 7px 4px; border-bottom: 1px dashed var(--border); }
+  .compare-row-error td { color: #c0392b; font-size: 12px; }
+  .compare-summary { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
   #edit-hint {
     display: none;
     font-size: 12px;
@@ -160,23 +182,40 @@
     <h1>CableTrack Routing Tool</h1>
     <p class="subtitle">Prototype — planning/estimation only, not for navigation</p>
 
-    <div class="field-group">
-      <label for="origin-input">Start point</label>
-      <input type="text" id="origin-input" placeholder="Search a port, or click the map">
-      <div id="origin-list" class="autocomplete-list" style="display:none;"></div>
+    <div class="mode-toggle">
+      <button type="button" class="mode-btn active" id="mode-single-btn">Single route</button>
+      <button type="button" class="mode-btn" id="mode-compare-btn">Compare routes</button>
     </div>
-    <div class="field-group">
-      <label for="dest-input">Destination</label>
-      <input type="text" id="dest-input" placeholder="Search a port, or click the map">
-      <div id="dest-list" class="autocomplete-list" style="display:none;"></div>
-    </div>
-    <p class="hint">Click the map to set points directly: first click = start, second click = destination. Once a route is drawn, drag its vertices (or click the line to add one) to correct it.</p>
 
-    <div class="btn-row">
-      <button class="btn-primary" id="generate-btn" disabled>Generate route</button>
-      <button class="btn-secondary" id="reset-btn">Reset</button>
+    <div id="single-mode-section">
+      <div class="field-group">
+        <label for="origin-input">Start point</label>
+        <input type="text" id="origin-input" placeholder="Search a port, or click the map">
+        <div id="origin-list" class="autocomplete-list" style="display:none;"></div>
+      </div>
+      <div class="field-group">
+        <label for="dest-input">Destination</label>
+        <input type="text" id="dest-input" placeholder="Search a port, or click the map">
+        <div id="dest-list" class="autocomplete-list" style="display:none;"></div>
+      </div>
+      <p class="hint">Click the map to set points directly: first click = start, second click = destination. Once a route is drawn, drag its vertices (or click the line to add one) to correct it.</p>
+
+      <div class="btn-row">
+        <button class="btn-primary" id="generate-btn" disabled>Generate route</button>
+        <button class="btn-secondary" id="reset-btn">Reset</button>
+      </div>
+      <div id="edit-hint">Route edited — click Recalculate to update the figures below.</div>
     </div>
-    <div id="edit-hint">Route edited — click Recalculate to update the figures below.</div>
+
+    <div id="compare-mode-section" style="display:none;">
+      <p class="hint">Add up to 10 start/destination pairs. All routes share the speed, zone and cost assumptions below.</p>
+      <div id="compare-rows"></div>
+      <div class="btn-row">
+        <button type="button" class="btn-secondary" id="add-route-btn">+ Add route</button>
+        <button type="button" class="btn-secondary" id="clear-routes-btn">Clear all</button>
+      </div>
+      <button class="btn-primary" id="compare-btn" style="width:100%; margin-top:4px;" disabled>Compare routes</button>
+    </div>
 
     <div class="section-title">Speed zones (knots)</div>
     <div class="params-grid">
@@ -210,6 +249,9 @@
     <div class="section-title">Result</div>
     <div id="results">
       <div id="placeholder">Set a start point and destination to generate a route.</div>
+    </div>
+    <div id="compare-results-wrap" style="display:none;">
+      <div id="compare-placeholder" class="placeholder-text">Add at least one route above, then click Compare routes.</div>
     </div>
     <div id="passage-note"></div>
   </div>
@@ -472,6 +514,267 @@ function renderResults(s) {
     <div class="result-row"><span class="label">Vessel cost</span><span class="value">£${s.vessel_cost.toLocaleString()}</span></div>
     <div class="result-row total"><span class="label">Total transit cost</span><span class="value">£${s.total_cost.toLocaleString()}</span></div>
   `;
+}
+
+// --- Compare mode ------------------------------------------------------
+// Lets a user line up several origin/destination pairs (up to 10) and see
+// them side by side: colour-coded lines on the map plus a sortable table
+// of distance/transit/cost. Reuses the existing /api/route and /api/stats
+// endpoints (fired in parallel per row) rather than adding a new backend
+// batch endpoint -- simplest path, and the free-tier instance's limiting
+// factor is CPU time either way, not request count.
+const ROUTE_COLORS = ['#1f8fce', '#e6550d', '#31a354', '#756bb1', '#e7298a', '#66a61e', '#e6ab02', '#a6761d', '#17becf', '#c0392b'];
+
+const modeSingleBtn = document.getElementById('mode-single-btn');
+const modeCompareBtn = document.getElementById('mode-compare-btn');
+const singleModeSection = document.getElementById('single-mode-section');
+const compareModeSection = document.getElementById('compare-mode-section');
+const resultsSingleEl = document.getElementById('results');
+const compareResultsWrap = document.getElementById('compare-results-wrap');
+const compareRowsEl = document.getElementById('compare-rows');
+const addRouteBtn = document.getElementById('add-route-btn');
+const clearRoutesBtn = document.getElementById('clear-routes-btn');
+const compareBtn = document.getElementById('compare-btn');
+
+let compareRows = [];       // { id, originPoint, destPoint, originLabel, destLabel, color }
+let compareLayers = {};     // id -> L.polyline
+let nextCompareId = 1;
+let compareResultsData = [];
+let compareSortKey = 'total_cost';
+let compareSortAsc = true;
+
+function setMode(mode) {
+  const isCompare = mode === 'compare';
+  modeSingleBtn.classList.toggle('active', !isCompare);
+  modeCompareBtn.classList.toggle('active', isCompare);
+  singleModeSection.style.display = isCompare ? 'none' : 'block';
+  compareModeSection.style.display = isCompare ? 'block' : 'none';
+  resultsSingleEl.style.display = isCompare ? 'none' : 'block';
+  compareResultsWrap.style.display = isCompare ? 'block' : 'none';
+  passageNote.style.display = 'none';
+  if (isCompare) {
+    if (routeLayer) { map.removeLayer(routeLayer); }
+    if (compareRows.length === 0) { addCompareRow(); addCompareRow(); }
+  } else {
+    clearCompareLayers();
+    if (routeLayer) { routeLayer.addTo(map); }
+  }
+}
+modeSingleBtn.addEventListener('click', () => setMode('single'));
+modeCompareBtn.addEventListener('click', () => setMode('compare'));
+
+function clearCompareLayers() {
+  Object.keys(compareLayers).forEach(id => map.removeLayer(compareLayers[id]));
+  compareLayers = {};
+}
+
+function createCompareRowElement(row, index) {
+  const div = document.createElement('div');
+  div.className = 'compare-row';
+  div.id = 'compare-row-' + row.id;
+  div.innerHTML = `
+    <div class="compare-row-header">
+      <span class="color-dot" style="background:${row.color}"></span>
+      <span class="compare-row-title">Route ${index}</span>
+      <button type="button" class="remove-row-btn" title="Remove route">&times;</button>
+    </div>
+    <div class="field-group">
+      <input type="text" class="compare-origin-input" placeholder="Start port">
+      <div class="autocomplete-list" style="display:none;"></div>
+    </div>
+    <div class="field-group">
+      <input type="text" class="compare-dest-input" placeholder="Destination port">
+      <div class="autocomplete-list" style="display:none;"></div>
+    </div>
+  `;
+  const lists = div.querySelectorAll('.autocomplete-list');
+  const originInputEl = div.querySelector('.compare-origin-input');
+  const destInputEl = div.querySelector('.compare-dest-input');
+  wireAutocomplete(originInputEl, lists[0], (lonlat, label) => {
+    row.originPoint = lonlat; row.originLabel = label; originInputEl.value = label;
+    updateCompareControls();
+  });
+  wireAutocomplete(destInputEl, lists[1], (lonlat, label) => {
+    row.destPoint = lonlat; row.destLabel = label; destInputEl.value = label;
+    updateCompareControls();
+  });
+  div.querySelector('.remove-row-btn').addEventListener('click', () => removeCompareRow(row.id));
+  return div;
+}
+
+function addCompareRow() {
+  if (compareRows.length >= 10) return;
+  const id = nextCompareId++;
+  const color = ROUTE_COLORS[(id - 1) % ROUTE_COLORS.length];
+  const row = { id, originPoint: null, destPoint: null, originLabel: '', destLabel: '', color };
+  compareRows.push(row);
+  compareRowsEl.appendChild(createCompareRowElement(row, compareRows.length));
+  updateCompareControls();
+}
+
+function removeCompareRow(id) {
+  compareRows = compareRows.filter(r => r.id !== id);
+  const el = document.getElementById('compare-row-' + id);
+  if (el) el.remove();
+  compareRowsEl.querySelectorAll('.compare-row').forEach((rowEl, i) => {
+    const t = rowEl.querySelector('.compare-row-title');
+    if (t) t.textContent = 'Route ' + (i + 1);
+  });
+  if (compareLayers[id]) { map.removeLayer(compareLayers[id]); delete compareLayers[id]; }
+  updateCompareControls();
+}
+
+clearRoutesBtn.addEventListener('click', () => {
+  compareRows = [];
+  compareRowsEl.innerHTML = '';
+  clearCompareLayers();
+  compareResultsData = [];
+  compareResultsWrap.innerHTML = '<div id="compare-placeholder" class="placeholder-text">Add at least one route above, then click Compare routes.</div>';
+  updateCompareControls();
+});
+
+function updateCompareControls() {
+  addRouteBtn.disabled = compareRows.length >= 10;
+  const readyCount = compareRows.filter(r => r.originPoint && r.destPoint).length;
+  compareBtn.disabled = readyCount < 1;
+  compareBtn.textContent = readyCount > 0 ? `Compare ${readyCount} route${readyCount > 1 ? 's' : ''}` : 'Compare routes';
+}
+
+addRouteBtn.addEventListener('click', addCompareRow);
+
+compareBtn.addEventListener('click', async () => {
+  const readyRows = compareRows.filter(r => r.originPoint && r.destPoint);
+  if (!readyRows.length) return;
+
+  compareBtn.disabled = true;
+  const originalLabel = compareBtn.textContent;
+  compareBtn.textContent = `Comparing ${readyRows.length} route${readyRows.length > 1 ? 's' : ''}…`;
+  clearCompareLayers();
+  compareResultsWrap.innerHTML = '<div class="placeholder-text">Fetching routes…</div>';
+
+  const sharedParams = {
+    port_speed_kn: parseFloat(document.getElementById('port-speed').value),
+    approach_speed_kn: parseFloat(document.getElementById('approach-speed').value),
+    open_sea_speed_kn: parseFloat(document.getElementById('open-speed').value),
+    port_radius_nm: parseFloat(document.getElementById('port-radius').value),
+    approach_radius_nm: parseFloat(document.getElementById('approach-radius').value),
+    weather_allowance_pct: parseFloat(document.getElementById('allowance').value),
+    distance_allowance_pct: parseFloat(document.getElementById('distance-allowance').value),
+    current_factor_pct: parseFloat(document.getElementById('current-factor').value),
+    fuel_burn_t_per_day: parseFloat(document.getElementById('fuel-burn').value),
+    fuel_price_per_t: parseFloat(document.getElementById('fuel-price').value),
+    vessel_day_rate: parseFloat(document.getElementById('vessel-rate').value),
+  };
+
+  const settled = await Promise.allSettled(readyRows.map(async (row) => {
+    const routeData = await fetchJsonWithRetry('/api/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ origin: row.originPoint, destination: row.destPoint }),
+    });
+    const statsData = await fetchJsonWithRetry('/api/stats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ coordinates: routeData.coordinates, ...sharedParams }),
+    });
+    return { routeData, statsData };
+  }));
+
+  const bounds = [];
+  compareResultsData = settled.map((res, i) => {
+    const row = readyRows[i];
+    const label = `${row.originLabel || 'Start'} → ${row.destLabel || 'Destination'}`;
+    if (res.status === 'fulfilled') {
+      const { routeData, statsData } = res.value;
+      const latlngs = routeData.coordinates.map(c => [c[1], c[0]]);
+      const layer = L.polyline(latlngs, { color: row.color, weight: 3 }).addTo(map);
+      compareLayers[row.id] = layer;
+      bounds.push(...latlngs);
+      return {
+        id: row.id, color: row.color, label, ok: true,
+        distance_nm: statsData.effective_distance_nm,
+        transit_hm: statsData.planning_transit_hm,
+        transit_days: statsData.planning_transit_days,
+        total_cost: statsData.total_cost,
+      };
+    }
+    return {
+      id: row.id, color: row.color, label, ok: false,
+      error: (res.reason && res.reason.message) ? res.reason.message : 'Request failed',
+    };
+  });
+
+  if (bounds.length) map.fitBounds(bounds, { padding: [30, 30] });
+  renderCompareTable();
+
+  compareBtn.disabled = false;
+  compareBtn.textContent = originalLabel;
+  updateCompareControls();
+});
+
+function renderCompareTable() {
+  if (!compareResultsData.length) {
+    compareResultsWrap.innerHTML = '<div class="placeholder-text">Add at least one route above, then click Compare routes.</div>';
+    return;
+  }
+  const okRows = compareResultsData.filter(r => r.ok);
+  const errRows = compareResultsData.filter(r => !r.ok);
+  okRows.sort((a, b) => {
+    let av = a[compareSortKey], bv = b[compareSortKey];
+    if (typeof av === 'string') {
+      return compareSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    }
+    return compareSortAsc ? av - bv : bv - av;
+  });
+  const sorted = [...okRows, ...errRows];
+
+  const cols = [
+    { key: 'label', label: 'Route' },
+    { key: 'distance_nm', label: 'Distance' },
+    { key: 'transit_days', label: 'Transit' },
+    { key: 'total_cost', label: 'Total cost' },
+  ];
+
+  const summary = errRows.length
+    ? `${okRows.length} of ${compareResultsData.length} routes calculated (${errRows.length} failed — see below).`
+    : `${okRows.length} route${okRows.length > 1 ? 's' : ''} compared.`;
+
+  compareResultsWrap.innerHTML = `
+    <div class="compare-summary">${summary}</div>
+    <table class="compare-table">
+      <thead>
+        <tr>
+          <th></th>
+          ${cols.map(c => `<th data-key="${c.key}" class="${compareSortKey === c.key ? 'sorted' : ''}">${c.label}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${sorted.map(r => r.ok ? `
+          <tr>
+            <td><span class="color-dot" style="background:${r.color}"></span></td>
+            <td>${r.label}</td>
+            <td>${r.distance_nm} nm</td>
+            <td>${r.transit_hm}</td>
+            <td>£${r.total_cost.toLocaleString()}</td>
+          </tr>
+        ` : `
+          <tr class="compare-row-error">
+            <td><span class="color-dot" style="background:${r.color}"></span></td>
+            <td>${r.label}</td>
+            <td colspan="3">Failed: ${r.error}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+  compareResultsWrap.querySelectorAll('th[data-key]').forEach(th => {
+    th.addEventListener('click', () => {
+      const key = th.dataset.key;
+      if (compareSortKey === key) { compareSortAsc = !compareSortAsc; }
+      else { compareSortKey = key; compareSortAsc = true; }
+      renderCompareTable();
+    });
+  });
 }
 </script>
 </body>
