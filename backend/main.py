@@ -17,24 +17,11 @@ import time
 
 import httpx
 import searoute as sr
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 app = FastAPI(title="CableTrack Routing Tool Prototype")
-
-# Temporary, narrow CORS allowance -- needed only so a one-off browser-side
-# data extraction script (run from a page that CAN reach the Overpass API,
-# since this server's own outbound requests to it are blocked -- see the
-# /api/windfarms/_seed comment below) can POST results back here. Remove
-# once the windfarm data pipeline no longer needs manual reseeding.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-)
 
 # ---------------------------------------------------------------------------
 # Port search data -- reuse searoute-py's own bundled port list (3,962 ports)
@@ -351,13 +338,15 @@ def get_tides(req: TideRequest):
 # IPv4 DNS then gets "Connection refused", consistent with Overpass
 # blocklisting cloud/datacenter IP ranges to protect its free,
 # volunteer-funded service from exactly this kind of server-to-server bulk
-# use). The snapshot is refreshed manually from a browser session (which
-# isn't subject to that block) via the /api/windfarms/_seed endpoint below --
-# this is OSM community data already described as non-authoritative, so a
-# periodically-refreshed snapshot is an honest tradeoff, not a regression.
+# use). The snapshot was captured from a browser session (not subject to
+# that block) and committed to the repo -- this is OSM community data
+# already described as non-authoritative, so a periodically-refreshed
+# snapshot (replace windfarms_data.json and redeploy to update it) is an
+# honest tradeoff, not a regression. A one-off /api/windfarms/_seed endpoint
+# was used to extract the data server-side for this commit and has since
+# been removed; recreate it the same way if a refresh is needed later.
 # ---------------------------------------------------------------------------
 _WINDFARM_DATA_PATH = os.path.join(os.path.dirname(__file__), "windfarms_data.json")
-_SEED_TOKEN = os.environ.get("WINDFARM_SEED_TOKEN", "cabletrack-temp-seed")
 
 
 @app.get("/api/windfarms")
@@ -368,22 +357,6 @@ def get_windfarms():
     except (FileNotFoundError, json.JSONDecodeError):
         return {"error": "Windfarm data hasn't been loaded on this server yet.", "windfarms": []}
     return {"windfarms": windfarms, "cached": True}
-
-
-@app.post("/api/windfarms/_seed")
-async def seed_windfarms(request: Request):
-    # One-off data-loading endpoint -- lets a browser session (which can
-    # reach Overpass, unlike this server) push a fresh snapshot here instead
-    # of this server having to fetch it. Minimal shared-token gate just to
-    # keep random internet traffic from overwriting the file; not a real
-    # secret boundary. Remove this endpoint once a better refresh workflow
-    # exists, or if leaving it live becomes a concern.
-    if request.headers.get("X-Seed-Token") != _SEED_TOKEN:
-        return {"error": "Unauthorized"}
-    payload = await request.json()
-    with open(_WINDFARM_DATA_PATH, "w") as f:
-        json.dump(payload, f)
-    return {"saved": len(payload)}
 
 
 # ---------------------------------------------------------------------------
