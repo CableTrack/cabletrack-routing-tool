@@ -322,6 +322,92 @@ def get_tides(req: TideRequest):
 
 
 # ---------------------------------------------------------------------------
+# /api/windfarms -- worldwide offshore wind farm locations via OpenStreetMap's
+# Overpass API (overpass-api.de), free and keyless. Offshore wind farms are
+# identified by the `seamark:production_area:category=wind_farm` tag, which
+# marine charts use specifically for offshore production areas -- this keeps
+# the result to a few hundred offshore sites worldwide rather than pulling in
+# every onshore wind farm on the planet (tens of thousands).
+#
+# Status (operational / under construction / planned) is inferred from OSM's
+# lifecycle tagging conventions: a `proposed:power`/`proposed:plant:source`
+# prefix or a `seamark:production_area:condition` of "planned"/"proposed"
+# means planned; a `construction:power` prefix or a condition mentioning
+# "construction" means under construction; anything else is treated as
+# operational. This is OSM community data, not an authoritative register --
+# coverage of very recently announced projects will be incomplete.
+#
+# This must run server-side: Overpass does not send CORS headers permitting
+# browser fetches from arbitrary origins (confirmed -- a direct client-side
+# fetch from this app's own domain fails with a generic "Failed to fetch",
+# while the same query works fine from a page already on overpass-api.de).
+# Cached in-process for a day since offshore wind farm locations change
+# rarely; this also avoids hammering the shared public Overpass instance on
+# every page load.
+# ---------------------------------------------------------------------------
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+_WINDFARM_CACHE_TTL_S = 24 * 60 * 60  # 24 hours
+_windfarm_cache: tuple[float, list] | None = None
+
+_WINDFARM_QUERY = """
+[out:json][timeout:60];
+(
+  way["seamark:production_area:category"="wind_farm"];
+  relation["seamark:production_area:category"="wind_farm"];
+  node["seamark:production_area:category"="wind_farm"];
+);
+out tags center 3000;
+"""
+
+
+def _classify_windfarm_status(tags: dict) -> str:
+    condition = (tags.get("seamark:production_area:condition") or "").lower()
+    if "proposed:power" in tags or "planned" in condition or "proposed" in condition:
+        return "planned"
+    if "construction:power" in tags or "construction" in condition:
+        return "construction"
+    return "operational"
+
+
+@app.get("/api/windfarms")
+def get_windfarms():
+    global _windfarm_cache
+    now = time.time()
+    if _windfarm_cache and (now - _windfarm_cache[0]) < _WINDFARM_CACHE_TTL_S:
+        return {"windfarms": _windfarm_cache[1], "cached": True}
+
+    try:
+        with httpx.Client(timeout=70) as client:
+            resp = client.post(OVERPASS_URL, data={"data": _WINDFARM_QUERY})
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError:
+        # Serve stale cache rather than nothing if Overpass is unreachable.
+        if _windfarm_cache:
+            return {"windfarms": _windfarm_cache[1], "cached": True, "stale": True}
+        return {"error": "Couldn't reach the windfarm data source (OpenStreetMap Overpass API). Try again shortly."}
+
+    windfarms = []
+    for el in data.get("elements", []):
+        tags = el.get("tags", {})
+        center = el.get("center") or {"lat": el.get("lat"), "lon": el.get("lon")}
+        if center.get("lat") is None or center.get("lon") is None:
+            continue
+        windfarms.append({
+            "id": el.get("id"),
+            "lat": center["lat"],
+            "lon": center["lon"],
+            "name": tags.get("name") or tags.get("seamark:name") or "Unnamed wind farm",
+            "operator": tags.get("operator"),
+            "capacity": tags.get("plant:output:electricity") or tags.get("proposed:plant:output:electricity"),
+            "status": _classify_windfarm_status(tags),
+        })
+
+    _windfarm_cache = (now, windfarms)
+    return {"windfarms": windfarms, "cached": False}
+
+
+# ---------------------------------------------------------------------------
 # Serve the frontend
 # ---------------------------------------------------------------------------
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
