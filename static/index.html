@@ -440,7 +440,7 @@ windfarmToggleInput.addEventListener('change', async () => {
   try {
     const data = await fetchJsonWithRetry('/api/windfarms', {}, 1);
     if (data.error) throw new Error(data.error);
-    const markers = (data.windfarms || []).map(w => {
+    const markers = (data.windfarms || []).filter(w => w.name !== 'Unnamed wind farm').map(w => {
       const style = WINDFARM_STATUS_STYLE[w.status] || WINDFARM_STATUS_STYLE.operational;
       const marker = L.circleMarker([w.lat, w.lon], {
         radius: 5,
