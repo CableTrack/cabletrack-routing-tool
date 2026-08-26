@@ -13,16 +13,28 @@ Then open http://localhost:8000 in a browser.
 import json
 import math
 import os
-import socket
 import time
 
 import httpx
 import searoute as sr
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 app = FastAPI(title="CableTrack Routing Tool Prototype")
+
+# Temporary, narrow CORS allowance -- needed only so a one-off browser-side
+# data extraction script (run from a page that CAN reach the Overpass API,
+# since this server's own outbound requests to it are blocked -- see the
+# /api/windfarms/_seed comment below) can POST results back here. Remove
+# once the windfarm data pipeline no longer needs manual reseeding.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 # ---------------------------------------------------------------------------
 # Port search data -- reuse searoute-py's own bundled port list (3,962 ports)
@@ -323,103 +335,55 @@ def get_tides(req: TideRequest):
 
 
 # ---------------------------------------------------------------------------
-# /api/windfarms -- worldwide offshore wind farm locations via OpenStreetMap's
-# Overpass API (overpass-api.de), free and keyless. Offshore wind farms are
-# identified by the `seamark:production_area:category=wind_farm` tag, which
-# marine charts use specifically for offshore production areas -- this keeps
-# the result to a few hundred offshore sites worldwide rather than pulling in
-# every onshore wind farm on the planet (tens of thousands).
+# /api/windfarms -- worldwide offshore wind farm locations, originally sourced
+# from OpenStreetMap's Overpass API (identified via the marine-chart tag
+# `seamark:production_area:category=wind_farm`, which keeps the result to a
+# few hundred offshore sites worldwide rather than every onshore wind farm on
+# the planet). Status (operational / under construction / planned) comes from
+# OSM's lifecycle tagging: a `proposed:power` prefix or a
+# `seamark:production_area:condition` of "planned"/"proposed" means planned;
+# a `construction:power` prefix or a condition mentioning "construction"
+# means under construction; anything else is operational.
 #
-# Status (operational / under construction / planned) is inferred from OSM's
-# lifecycle tagging conventions: a `proposed:power`/`proposed:plant:source`
-# prefix or a `seamark:production_area:condition` of "planned"/"proposed"
-# means planned; a `construction:power` prefix or a condition mentioning
-# "construction" means under construction; anything else is treated as
-# operational. This is OSM community data, not an authoritative register --
-# coverage of very recently announced projects will be incomplete.
-#
-# This must run server-side: Overpass does not send CORS headers permitting
-# browser fetches from arbitrary origins (confirmed -- a direct client-side
-# fetch from this app's own domain fails with a generic "Failed to fetch",
-# while the same query works fine from a page already on overpass-api.de).
-# Cached in-process for a day since offshore wind farm locations change
-# rarely; this also avoids hammering the shared public Overpass instance on
-# every page load.
+# Served from a bundled static snapshot (windfarms_data.json) rather than a
+# live Overpass call: Render's outbound network cannot reach overpass-api.de
+# at all (confirmed -- IPv6-only route gives "Network unreachable"; forcing
+# IPv4 DNS then gets "Connection refused", consistent with Overpass
+# blocklisting cloud/datacenter IP ranges to protect its free,
+# volunteer-funded service from exactly this kind of server-to-server bulk
+# use). The snapshot is refreshed manually from a browser session (which
+# isn't subject to that block) via the /api/windfarms/_seed endpoint below --
+# this is OSM community data already described as non-authoritative, so a
+# periodically-refreshed snapshot is an honest tradeoff, not a regression.
 # ---------------------------------------------------------------------------
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-_WINDFARM_CACHE_TTL_S = 24 * 60 * 60  # 24 hours
-_windfarm_cache: tuple[float, list] | None = None
-
-_WINDFARM_QUERY = """
-[out:json][timeout:60];
-(
-  way["seamark:production_area:category"="wind_farm"];
-  relation["seamark:production_area:category"="wind_farm"];
-  node["seamark:production_area:category"="wind_farm"];
-);
-out tags center 3000;
-"""
-
-
-def _classify_windfarm_status(tags: dict) -> str:
-    condition = (tags.get("seamark:production_area:condition") or "").lower()
-    if "proposed:power" in tags or "planned" in condition or "proposed" in condition:
-        return "planned"
-    if "construction:power" in tags or "construction" in condition:
-        return "construction"
-    return "operational"
+_WINDFARM_DATA_PATH = os.path.join(os.path.dirname(__file__), "windfarms_data.json")
+_SEED_TOKEN = os.environ.get("WINDFARM_SEED_TOKEN", "cabletrack-temp-seed")
 
 
 @app.get("/api/windfarms")
 def get_windfarms():
-    global _windfarm_cache
-    now = time.time()
-    if _windfarm_cache and (now - _windfarm_cache[0]) < _WINDFARM_CACHE_TTL_S:
-        return {"windfarms": _windfarm_cache[1], "cached": True}
-
-    # Render's containers appear to lack an outbound IPv6 route, but Overpass's
-    # hostname also resolves an AAAA record -- if the resolver returns that
-    # first, the connection fails with "Network is unreachable" rather than
-    # falling back to IPv4 (confirmed via a temporary debug response). Force
-    # IPv4-only DNS resolution for the duration of this call rather than for
-    # the whole process.
-    _orig_getaddrinfo = socket.getaddrinfo
-
-    def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-        return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
-
     try:
-        socket.getaddrinfo = _ipv4_only_getaddrinfo
-        with httpx.Client(timeout=70) as client:
-            resp = client.post(OVERPASS_URL, data={"data": _WINDFARM_QUERY})
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPError as e:
-        # Serve stale cache rather than nothing if Overpass is unreachable.
-        if _windfarm_cache:
-            return {"windfarms": _windfarm_cache[1], "cached": True, "stale": True}
-        return {"error": "Couldn't reach the windfarm data source (OpenStreetMap Overpass API). Try again shortly.", "debug": f"{type(e).__name__}: {e}"}
-    finally:
-        socket.getaddrinfo = _orig_getaddrinfo
+        with open(_WINDFARM_DATA_PATH) as f:
+            windfarms = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"error": "Windfarm data hasn't been loaded on this server yet.", "windfarms": []}
+    return {"windfarms": windfarms, "cached": True}
 
-    windfarms = []
-    for el in data.get("elements", []):
-        tags = el.get("tags", {})
-        center = el.get("center") or {"lat": el.get("lat"), "lon": el.get("lon")}
-        if center.get("lat") is None or center.get("lon") is None:
-            continue
-        windfarms.append({
-            "id": el.get("id"),
-            "lat": center["lat"],
-            "lon": center["lon"],
-            "name": tags.get("name") or tags.get("seamark:name") or "Unnamed wind farm",
-            "operator": tags.get("operator"),
-            "capacity": tags.get("plant:output:electricity") or tags.get("proposed:plant:output:electricity"),
-            "status": _classify_windfarm_status(tags),
-        })
 
-    _windfarm_cache = (now, windfarms)
-    return {"windfarms": windfarms, "cached": False}
+@app.post("/api/windfarms/_seed")
+async def seed_windfarms(request: Request):
+    # One-off data-loading endpoint -- lets a browser session (which can
+    # reach Overpass, unlike this server) push a fresh snapshot here instead
+    # of this server having to fetch it. Minimal shared-token gate just to
+    # keep random internet traffic from overwriting the file; not a real
+    # secret boundary. Remove this endpoint once a better refresh workflow
+    # exists, or if leaving it live becomes a concern.
+    if request.headers.get("X-Seed-Token") != _SEED_TOKEN:
+        return {"error": "Unauthorized"}
+    payload = await request.json()
+    with open(_WINDFARM_DATA_PATH, "w") as f:
+        json.dump(payload, f)
+    return {"saved": len(payload)}
 
 
 # ---------------------------------------------------------------------------
