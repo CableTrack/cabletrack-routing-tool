@@ -199,6 +199,12 @@
     </label>
     <p class="hint depth-hint" style="display:none;">Global bathymetry grid, ~450m resolution. Public domain data from GEBCO — useful for open-ocean context, not detailed enough to trust in shallow coastal water or for anything safety-related.</p>
 
+    <label class="depth-toggle" for="tidal-overlay-toggle-input">
+      <input type="checkbox" id="tidal-overlay-toggle-input">
+      <span>Show tidal range (worldwide)</span>
+    </label>
+    <p class="hint depth-hint" id="tidal-overlay-hint" style="display:none;">Global tidal range in metres, derived from the FES2014 harmonic model (Aviso+/CNES). Rough, large-scale picture only -- for a specific port's actual range, use "Check tidal range" below instead.</p>
+
     <div id="single-mode-section">
       <div class="field-group">
         <label for="origin-input">Start point</label>
@@ -212,6 +218,7 @@
         <div id="dest-list" class="autocomplete-list" style="display:none;"></div>
         <div id="dest-tide" class="tide-info" style="display:none;"></div>
       </div>
+      <button type="button" class="btn-secondary" id="tide-check-btn" style="width:100%; margin-bottom:14px;" disabled>Check tidal range at ports</button>
       <p class="hint">Click the map to set points directly: first click = start, second click = destination. Once a route is drawn, drag its vertices (or click the line to add one) to correct it.</p>
 
       <div class="btn-row">
@@ -319,6 +326,36 @@ depthToggleInput.addEventListener('change', () => {
   }
 });
 
+// --- Worldwide tidal range overlay (Esri / FES2014) ------------------------
+// A rough, whole-ocean picture of tidal range -- separate from the precise
+// per-port "Check tidal range" lookup below, and doesn't touch the TideCheck
+// API budget at all since it's just map tiles, not per-point API calls.
+// Esri hosts a public, pre-cached tile layer computed from the FES2014
+// harmonic model (2*(M2+S2+K1+O1) constituent amplitudes) -- same underlying
+// science as tide-station predictions, just gridded globally instead of
+// computed per-station. License (Aviso+) explicitly permits any derivative
+// use, commercial included. Standard XYZ tile scheme, no API key required
+// for this public item.
+const tidalOverlayLayer = L.tileLayer(
+  'https://tiledimageservices.arcgis.com/bDAhvQYMG4WL8O5o/arcgis/rest/services/Global_Tidal_Range_meters2/ImageServer/tile/{z}/{y}/{x}',
+  {
+    opacity: 0.6,
+    maxZoom: 12,
+    attribution: 'Global tidal range: Esri, FES2014 (Aviso+/CNES/Legos/CLS/Noveltis)',
+  }
+);
+const tidalOverlayToggleInput = document.getElementById('tidal-overlay-toggle-input');
+const tidalOverlayHint = document.getElementById('tidal-overlay-hint');
+tidalOverlayToggleInput.addEventListener('change', () => {
+  if (tidalOverlayToggleInput.checked) {
+    tidalOverlayLayer.addTo(map);
+    tidalOverlayHint.style.display = 'block';
+  } else {
+    map.removeLayer(tidalOverlayLayer);
+    tidalOverlayHint.style.display = 'none';
+  }
+});
+
 let originPoint = null;      // [lon, lat]
 let destPoint = null;        // [lon, lat]
 let originMarker = null;
@@ -337,6 +374,7 @@ const editHint = document.getElementById('edit-hint');
 const passageNote = document.getElementById('passage-note');
 const originTideEl = document.getElementById('origin-tide');
 const destTideEl = document.getElementById('dest-tide');
+const tideCheckBtn = document.getElementById('tide-check-btn');
 
 // --- Tidal range (TideCheck) ------------------------------------------
 // Planning-only context alongside the water-depth overlay -- not live
@@ -374,8 +412,8 @@ function setOrigin(lonlat, label) {
   originMarker = L.marker([lonlat[1], lonlat[0]], { title: 'Start' }).addTo(map)
     .bindTooltip(label || 'Start', { permanent: false });
   originInput.value = label || `${lonlat[1].toFixed(3)}, ${lonlat[0].toFixed(3)}`;
+  originTideEl.style.display = 'none';
   updateGenerateEnabled();
-  fetchTideInfo(lonlat, originTideEl);
 }
 
 function setDest(lonlat, label) {
@@ -384,13 +422,23 @@ function setDest(lonlat, label) {
   destMarker = L.marker([lonlat[1], lonlat[0]], { title: 'Destination' }).addTo(map)
     .bindTooltip(label || 'Destination', { permanent: false });
   destInput.value = label || `${lonlat[1].toFixed(3)}, ${lonlat[0].toFixed(3)}`;
+  destTideEl.style.display = 'none';
   updateGenerateEnabled();
-  fetchTideInfo(lonlat, destTideEl);
 }
 
 function updateGenerateEnabled() {
   generateBtn.disabled = !(originPoint && destPoint);
+  tideCheckBtn.disabled = !(originPoint || destPoint);
 }
+
+// Tide lookups are opt-in via this button rather than firing automatically
+// on every port pick -- the TideCheck free tier is a tight 50 requests/day,
+// and auto-firing on selection burns through it fast if you're just
+// browsing ports rather than committing to a route.
+tideCheckBtn.addEventListener('click', () => {
+  if (originPoint) fetchTideInfo(originPoint, originTideEl);
+  if (destPoint) fetchTideInfo(destPoint, destTideEl);
+});
 
 map.on('click', (e) => {
   const lonlat = [e.latlng.lng, e.latlng.lat];
