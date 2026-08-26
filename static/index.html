@@ -1093,6 +1093,23 @@ function renderCompareTable() {
     });
   });
 }
+
+// --- Prefill from query params (hand-off from the route-planner page on ---
+// --- cabletrack.co.uk) -----------------------------------------------------
+(function initFromQueryParams() {
+  const params = new URLSearchParams(window.location.search);
+  const olon = parseFloat(params.get('olon'));
+  const olat = parseFloat(params.get('olat'));
+  const dlon = parseFloat(params.get('dlon'));
+  const dlat = parseFloat(params.get('dlat'));
+  if (![olon, olat, dlon, dlat].every(Number.isFinite)) return;
+  setOrigin([olon, olat], params.get('oname') || null);
+  setDest([dlon, dlat], params.get('dname') || null);
+  map.fitBounds(L.latLngBounds([[olat, olon], [dlat, dlon]]), { padding: [60, 60] });
+  // Clean the URL so a refresh/bookmark doesn't keep re-triggering this
+  window.history.replaceState({}, '', window.location.pathname);
+  setTimeout(() => { if (!generateBtn.disabled) generateBtn.click(); }, 300);
+})();
 </script>
 </body>
 </html>
