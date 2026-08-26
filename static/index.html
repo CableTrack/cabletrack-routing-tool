@@ -205,6 +205,12 @@
     </label>
     <p class="hint depth-hint" id="tidal-overlay-hint" style="display:none;">Worldwide tidal zones from the FES2014 model (Aviso+/CNES) &mdash; blue = microtidal (&lt;2m), orange = mesotidal (2&ndash;4m), red = macrotidal (&gt;4m). Coarse classification only -- for a specific port's actual range, use "Check tidal range" below instead.</p>
 
+    <label class="depth-toggle" for="windfarm-toggle-input">
+      <input type="checkbox" id="windfarm-toggle-input">
+      <span>Show offshore windfarms (worldwide)</span>
+    </label>
+    <p class="hint depth-hint" id="windfarm-hint" style="display:none;">OpenStreetMap community data &mdash; green = operational, orange = under construction, grey (dashed) = planned. Not an authoritative register; recently announced projects may be missing. Click a marker for name/operator/capacity.</p>
+
     <div id="single-mode-section">
       <div class="field-group">
         <label for="origin-input">Start point</label>
@@ -398,6 +404,68 @@ tidalOverlayToggleInput.addEventListener('change', async () => {
     tidalOverlayToggleInput.checked = false;
   } finally {
     tidalOverlayLoading = false;
+  }
+});
+
+// --- Worldwide offshore windfarm overlay --------------------------------
+// Backed by our own /api/windfarms endpoint, which proxies+caches an
+// OpenStreetMap Overpass query server-side (a direct client-side fetch to
+// Overpass fails -- it doesn't send CORS headers for arbitrary origins).
+// Fetched once on first toggle, cached in `windfarmOverlayLayer`, same
+// lazy-load pattern as the tidal overlay above.
+const WINDFARM_STATUS_STYLE = {
+  operational: { color: '#2e8b57', dashArray: null },   // green
+  construction: { color: '#e8a33d', dashArray: null },  // orange
+  planned: { color: '#888', dashArray: '3,3' },          // grey, dashed
+};
+let windfarmOverlayLayer = null;
+let windfarmOverlayLoading = false;
+const windfarmToggleInput = document.getElementById('windfarm-toggle-input');
+const windfarmHint = document.getElementById('windfarm-hint');
+windfarmToggleInput.addEventListener('change', async () => {
+  if (!windfarmToggleInput.checked) {
+    if (windfarmOverlayLayer) map.removeLayer(windfarmOverlayLayer);
+    windfarmHint.style.display = 'none';
+    return;
+  }
+  windfarmHint.style.display = 'block';
+  if (windfarmOverlayLayer) {
+    windfarmOverlayLayer.addTo(map);
+    return;
+  }
+  if (windfarmOverlayLoading) return;
+  windfarmOverlayLoading = true;
+  const originalHintText = windfarmHint.textContent;
+  windfarmHint.textContent = 'Loading worldwide windfarm locations…';
+  try {
+    const data = await fetchJsonWithRetry('/api/windfarms', {}, 1);
+    if (data.error) throw new Error(data.error);
+    const markers = (data.windfarms || []).map(w => {
+      const style = WINDFARM_STATUS_STYLE[w.status] || WINDFARM_STATUS_STYLE.operational;
+      const marker = L.circleMarker([w.lat, w.lon], {
+        radius: 5,
+        color: style.color,
+        weight: 2,
+        dashArray: style.dashArray,
+        fillColor: style.color,
+        fillOpacity: 0.6,
+      });
+      const lines = [
+        `<strong>${escapeHtml(w.name)}</strong>`,
+        `Status: ${escapeHtml(w.status)}`,
+        w.operator ? `Operator: ${escapeHtml(w.operator)}` : null,
+        w.capacity ? `Capacity: ${escapeHtml(w.capacity)}` : null,
+      ].filter(Boolean);
+      marker.bindPopup(lines.join('<br>'));
+      return marker;
+    });
+    windfarmOverlayLayer = L.layerGroup(markers).addTo(map);
+    windfarmHint.textContent = originalHintText;
+  } catch (err) {
+    windfarmHint.textContent = 'Couldn\'t load windfarm data right now.';
+    windfarmToggleInput.checked = false;
+  } finally {
+    windfarmOverlayLoading = false;
   }
 });
 
