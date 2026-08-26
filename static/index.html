@@ -266,6 +266,17 @@
       <div class="field-group"><label>Vessel day rate (£/day)</label><input type="number" id="vessel-rate" value="12000" step="500"></div>
     </div>
 
+    <div class="section-title">Trips &amp; extra costs</div>
+    <div class="params-grid">
+      <div class="field-group"><label>Number of trips</label><input type="number" id="trips" value="1" min="1" step="1"></div>
+      <div class="field-group"><label>Additional cost (£)</label><input type="number" id="additional-cost" value="0" step="100"></div>
+    </div>
+    <div class="field-group" style="margin-top: 8px;">
+      <label>Additional cost note (optional)</label>
+      <input type="text" id="additional-cost-note" maxlength="200" placeholder="e.g. permits, standby days, mobilisation">
+      <p class="hint" id="additional-cost-note-counter" style="margin-top: 2px;">0 / 200</p>
+    </div>
+
     <button class="btn-primary" id="recalc-btn" style="width:100%; margin-top: 4px;" disabled>Recalculate</button>
 
     <div class="section-title">Result</div>
@@ -409,6 +420,14 @@ const passageNote = document.getElementById('passage-note');
 const originTideEl = document.getElementById('origin-tide');
 const destTideEl = document.getElementById('dest-tide');
 const tideCheckBtn = document.getElementById('tide-check-btn');
+
+const additionalCostNoteInput = document.getElementById('additional-cost-note');
+const additionalCostNoteCounter = document.getElementById('additional-cost-note-counter');
+if (additionalCostNoteInput && additionalCostNoteCounter) {
+  additionalCostNoteInput.addEventListener('input', () => {
+    additionalCostNoteCounter.textContent = `${additionalCostNoteInput.value.length} / 200`;
+  });
+}
 
 // --- Tidal range (TideCheck) ------------------------------------------
 // Planning-only context alongside the water-depth overlay -- not live
@@ -649,6 +668,9 @@ async function recalcStats() {
     fuel_burn_t_per_day: parseFloat(document.getElementById('fuel-burn').value),
     fuel_price_per_t: parseFloat(document.getElementById('fuel-price').value),
     vessel_day_rate: parseFloat(document.getElementById('vessel-rate').value),
+    trips: parseInt(document.getElementById('trips').value, 10) || 1,
+    additional_cost: parseFloat(document.getElementById('additional-cost').value) || 0,
+    additional_cost_note: document.getElementById('additional-cost-note').value.slice(0, 200),
   };
 
   const s = await fetchJsonWithRetry('/api/stats', {
@@ -659,6 +681,12 @@ async function recalcStats() {
   renderResults(s);
   routeIsDirty = false;
   editHint.style.display = 'none';
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : String(str);
+  return div.innerHTML;
 }
 
 function renderResults(s) {
@@ -679,7 +707,10 @@ function renderResults(s) {
     <div class="result-row"><span class="label">Fuel cost</span><span class="value">£${s.fuel_cost.toLocaleString()}</span></div>
     <div class="result-row"><span class="label">Vessel day rate</span><span class="value">£${s.vessel_day_rate.toLocaleString()}/day</span></div>
     <div class="result-row"><span class="label">Vessel cost</span><span class="value">£${s.vessel_cost.toLocaleString()}</span></div>
-    <div class="result-row total"><span class="label">Total transit cost</span><span class="value">£${s.total_cost.toLocaleString()}</span></div>
+    ${s.trips > 1 ? `<div class="result-row"><span class="label">Cost per trip</span><span class="value">£${s.cost_per_trip.toLocaleString()}</span></div>
+    <div class="result-row"><span class="label">Trips</span><span class="value">&times;${s.trips}</span></div>` : ''}
+    ${s.additional_cost ? `<div class="result-row"><span class="label">Additional cost${s.additional_cost_note ? ' (' + escapeHtml(s.additional_cost_note) + ')' : ''}</span><span class="value">£${s.additional_cost.toLocaleString()}</span></div>` : ''}
+    <div class="result-row total"><span class="label">Total cost</span><span class="value">£${s.total_cost.toLocaleString()}</span></div>
   `;
 }
 
@@ -852,6 +883,9 @@ compareBtn.addEventListener('click', async () => {
     fuel_burn_t_per_day: parseFloat(document.getElementById('fuel-burn').value),
     fuel_price_per_t: parseFloat(document.getElementById('fuel-price').value),
     vessel_day_rate: parseFloat(document.getElementById('vessel-rate').value),
+    trips: parseInt(document.getElementById('trips').value, 10) || 1,
+    additional_cost: parseFloat(document.getElementById('additional-cost').value) || 0,
+    additional_cost_note: document.getElementById('additional-cost-note').value.slice(0, 200),
   };
 
   const settled = await Promise.allSettled(readyRows.map(async (row) => {
@@ -884,6 +918,8 @@ compareBtn.addEventListener('click', async () => {
         transit_hm: statsData.planning_transit_hm,
         transit_days: statsData.planning_transit_days,
         total_cost: statsData.total_cost,
+        trips: statsData.trips,
+        additional_cost: statsData.additional_cost,
       };
     }
     return {
@@ -939,9 +975,17 @@ function renderCompareTable() {
     { key: 'cost_diff_pct', label: '% vs Route 1' },
   ];
 
-  const summary = errRows.length
+  const sharedTrips = okRows.find(r => r.trips > 1);
+  const sharedExtra = okRows.find(r => r.additional_cost);
+  const summaryExtras = [
+    sharedTrips ? `${sharedTrips.trips} trips applied to each route` : null,
+    sharedExtra ? `+£${sharedExtra.additional_cost.toLocaleString()} additional cost applied to each route` : null,
+  ].filter(Boolean).join(' · ');
+
+  const summary = (errRows.length
     ? `${okRows.length} of ${compareResultsData.length} routes calculated (${errRows.length} failed — see below).`
-    : `${okRows.length} route${okRows.length > 1 ? 's' : ''} compared.`;
+    : `${okRows.length} route${okRows.length > 1 ? 's' : ''} compared.`)
+    + (summaryExtras ? ` (${summaryExtras})` : '');
 
   compareResultsWrap.innerHTML = `
     <div class="compare-summary">${summary}</div>
