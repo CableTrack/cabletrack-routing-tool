@@ -14,6 +14,7 @@ import json
 import math
 import os
 import time
+import uuid
 
 import httpx
 import searoute as sr
@@ -96,8 +97,114 @@ def get_route(req: RouteRequest):
     return {
         "coordinates": route.geometry.coordinates,
         "distance_nm": route.properties["length"],
-        "passages_used": route.properties.get("passages"),
+        # searoute-py's own key here is "traversed_passages", not "passages" --
+        # this was silently returning None before, so the "Route uses: ..."
+        # note never actually showed anything.
+        "passages_used": route.properties.get("traversed_passages"),
     }
+
+
+# ---------------------------------------------------------------------------
+# /api/barriers -- "what if this passage were closed" testing tool.
+#
+# searoute-py's own `restrictions` param only lets you name one of a fixed
+# list of major chokepoints (suez, panama, gibraltar, etc) -- there's no
+# support for an arbitrary custom closure. But the underlying maritime
+# network it routes over (`sr.setup_M()`) is just a plain graph of
+# (lon, lat) nodes and weighted edges, so we can block a stretch ourselves:
+# find every edge whose segment crosses a barrier line the user draws, and
+# set its weight to infinity so Dijkstra can never use it. Restoring a
+# barrier puts the original weights back.
+#
+# This mutates the single shared graph instance that every /api/route call
+# uses (searoute-py caches it process-wide via lru_cache), so a barrier is
+# effectively global to this server -- fine for a single-user test/demo
+# tool, but note it isn't per-session and won't survive a server restart.
+# ---------------------------------------------------------------------------
+_active_barriers = {}  # id -> {"start": [lon,lat], "end": [lon,lat], "edges": [(u, v, orig_weight), ...]}
+
+
+def _orient(a, b, c):
+    val = (b[1] - a[1]) * (c[0] - b[0]) - (b[0] - a[0]) * (c[1] - b[1])
+    if val > 1e-12:
+        return 1
+    if val < -1e-12:
+        return -1
+    return 0
+
+
+def _on_segment(a, b, c):
+    return min(a[0], b[0]) - 1e-9 <= c[0] <= max(a[0], b[0]) + 1e-9 and \
+        min(a[1], b[1]) - 1e-9 <= c[1] <= max(a[1], b[1]) + 1e-9
+
+
+def _segments_intersect(p1, p2, p3, p4):
+    o1, o2 = _orient(p1, p2, p3), _orient(p1, p2, p4)
+    o3, o4 = _orient(p3, p4, p1), _orient(p3, p4, p2)
+    if o1 != o2 and o3 != o4:
+        return True
+    if o1 == 0 and _on_segment(p1, p2, p3):
+        return True
+    if o2 == 0 and _on_segment(p1, p2, p4):
+        return True
+    if o3 == 0 and _on_segment(p3, p4, p1):
+        return True
+    if o4 == 0 and _on_segment(p3, p4, p2):
+        return True
+    return False
+
+
+def _bbox_overlap(a1, a2, b1, b2, margin=0.02):
+    return not (
+        max(a1[0], a2[0]) + margin < min(b1[0], b2[0]) or
+        max(b1[0], b2[0]) < min(a1[0], a2[0]) - margin or
+        max(a1[1], a2[1]) + margin < min(b1[1], b2[1]) or
+        max(b1[1], b2[1]) < min(a1[1], a2[1]) - margin
+    )
+
+
+class BarrierRequest(BaseModel):
+    start: list[float]  # [lon, lat]
+    end: list[float]    # [lon, lat]
+
+
+@app.post("/api/barriers")
+def add_barrier(req: BarrierRequest):
+    # Must match the backend the plain /api/route call above uses (its
+    # default), or we'd be mutating a different, unused graph instance.
+    M = sr.setup_M(backend="networkx")
+    blocked = []
+    for u, v, data in M.edges(data=True):
+        if not _bbox_overlap(u, v, req.start, req.end):
+            continue
+        if _segments_intersect(u, v, req.start, req.end):
+            blocked.append((u, v, data.get("weight")))
+            data["weight"] = float("inf")
+    barrier_id = str(uuid.uuid4())[:8]
+    _active_barriers[barrier_id] = {"start": req.start, "end": req.end, "edges": blocked}
+    return {"id": barrier_id, "blocked_edges": len(blocked)}
+
+
+@app.get("/api/barriers")
+def list_barriers():
+    return [
+        {"id": bid, "start": b["start"], "end": b["end"], "blocked_edges": len(b["edges"])}
+        for bid, b in _active_barriers.items()
+    ]
+
+
+@app.delete("/api/barriers/{barrier_id}")
+def remove_barrier(barrier_id: str):
+    barrier = _active_barriers.pop(barrier_id, None)
+    if not barrier:
+        return {"error": "Barrier not found"}
+    M = sr.setup_M(backend="networkx")
+    restored = 0
+    for u, v, orig_weight in barrier["edges"]:
+        if M.has_edge(u, v):
+            M[u][v]["weight"] = orig_weight
+            restored += 1
+    return {"restored_edges": restored}
 
 
 # ---------------------------------------------------------------------------
