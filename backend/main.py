@@ -124,6 +124,20 @@ class StatsRequest(BaseModel):
     fuel_price_per_t: float = 620
     vessel_day_rate: float = 12000
 
+    # Number of transits this route represents -- e.g. a cable install that
+    # needs the vessel to make the same passage 3 times. Multiplies the
+    # per-transit fuel/vessel cost; distance and per-transit timing figures
+    # below are unaffected (they describe a single transit).
+    trips: int = 1
+
+    # A flat, user-supplied cost the tool has no way to derive itself
+    # (permits, standby days, mobilisation, etc.) -- added once to the
+    # total, not multiplied by trips. additional_cost_note is a short
+    # free-text reason, capped defensively server-side (the frontend also
+    # enforces this via maxlength on the input).
+    additional_cost: float = 0
+    additional_cost_note: str = ""
+
 
 def classify_zone(dist_to_nearest_end_nm: float, port_radius: float, approach_radius: float):
     if dist_to_nearest_end_nm <= port_radius:
@@ -175,9 +189,18 @@ def get_stats(req: StatsRequest):
     planning_transit_days = planning_transit_hours / 24
 
     fuel_required_t = req.fuel_burn_t_per_day * planning_transit_days
-    fuel_cost = fuel_required_t * req.fuel_price_per_t
-    vessel_cost = req.vessel_day_rate * planning_transit_days
-    total_cost = fuel_cost + vessel_cost
+    fuel_cost_per_trip = fuel_required_t * req.fuel_price_per_t
+    vessel_cost_per_trip = req.vessel_day_rate * planning_transit_days
+    cost_per_trip = fuel_cost_per_trip + vessel_cost_per_trip
+
+    trips = max(1, int(req.trips or 1))
+    fuel_cost = fuel_cost_per_trip * trips
+    vessel_cost = vessel_cost_per_trip * trips
+
+    additional_cost = req.additional_cost or 0
+    additional_cost_note = (req.additional_cost_note or "")[:200]
+
+    total_cost = (cost_per_trip * trips) + additional_cost
 
     def fmt_hm(hours):
         h = int(hours)
@@ -213,6 +236,10 @@ def get_stats(req: StatsRequest):
         "fuel_cost": round(fuel_cost, 2),
         "vessel_day_rate": req.vessel_day_rate,
         "vessel_cost": round(vessel_cost, 2),
+        "trips": trips,
+        "cost_per_trip": round(cost_per_trip, 2),
+        "additional_cost": round(additional_cost, 2),
+        "additional_cost_note": additional_cost_note,
         "total_cost": round(total_cost, 2),
     }
 
