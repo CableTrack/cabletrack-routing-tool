@@ -221,6 +221,10 @@
     </label>
     <p class="hint depth-hint" id="windfarm-hint" style="display:none;">OpenStreetMap community data &mdash; green = operational, orange = under construction, grey (dashed) = planned. Not an authoritative register; recently announced projects may be missing. Click a marker to use it as your start/destination and see its details.</p>
 
+    <button type="button" class="btn-secondary" id="barrier-draw-btn" style="width:100%; margin-bottom: 4px;">Draw a fictional barrier (test)</button>
+    <p class="hint depth-hint" id="barrier-hint" style="display:none;">Click two points on the map to draw a line. Any part of the routing network crossing it is blocked (weight set to infinity) until you remove it -- useful for testing "what if this passage were closed" scenarios. This is a shared, server-side test tool, not a real closure, and isn't specific to your session.</p>
+    <div id="barrier-list"></div>
+
     <div id="single-mode-section">
       <div class="field-group">
         <label for="origin-input">Start point</label>
@@ -476,6 +480,10 @@ windfarmToggleInput.addEventListener('change', async () => {
       // already set -- start over from here" branch).
       const handleWindfarmClick = () => {
         const lonlat = [w.lon, w.lat];
+        if (barrierDrawMode) {
+          handleBarrierClick(lonlat);
+          return;
+        }
         if (!originPoint) {
           setOrigin(lonlat, w.name);
         } else if (!destPoint) {
@@ -511,6 +519,91 @@ windfarmToggleInput.addEventListener('change', async () => {
     windfarmOverlayLoading = false;
   }
 });
+
+// --- Fictional barriers -- "what if this passage were closed" testing ----
+const barrierDrawBtn = document.getElementById('barrier-draw-btn');
+const barrierHint = document.getElementById('barrier-hint');
+const barrierListEl = document.getElementById('barrier-list');
+let barrierDrawMode = false;
+let barrierFirstPoint = null;
+let barrierFirstMarker = null;
+const barriers = {}; // id -> { line: L.Polyline, blockedEdges: number }
+
+function setBarrierDrawMode(on) {
+  barrierDrawMode = on;
+  if (!on) {
+    barrierFirstPoint = null;
+    if (barrierFirstMarker) { map.removeLayer(barrierFirstMarker); barrierFirstMarker = null; }
+    barrierDrawBtn.textContent = 'Draw a fictional barrier (test)';
+    barrierHint.style.display = 'none';
+  } else {
+    barrierDrawBtn.textContent = 'Click two points on the map…';
+    barrierHint.style.display = 'block';
+    barrierHint.textContent = 'Click a first point, then a second, to draw the barrier line.';
+  }
+}
+
+barrierDrawBtn.addEventListener('click', () => {
+  setBarrierDrawMode(!barrierDrawMode);
+});
+
+function renderBarrierList() {
+  const ids = Object.keys(barriers);
+  if (!ids.length) { barrierListEl.innerHTML = ''; return; }
+  barrierListEl.innerHTML = '<p class="hint" style="margin: 8px 0 4px;">Active barriers:</p>' + ids.map((id, i) => `
+    <div style="display:flex; align-items:center; justify-content:space-between; font-size:12px; padding:4px 0;">
+      <span>Barrier ${i + 1} — ${barriers[id].blockedEdges} route segment${barriers[id].blockedEdges === 1 ? '' : 's'} blocked${barriers[id].blockedEdges === 0 ? ' (network doesn\'t route through there anyway)' : ''}</span>
+      <button type="button" class="barrier-remove-btn" data-id="${id}" style="border:none; background:none; color:#b03030; cursor:pointer; font-weight:600;">Remove</button>
+    </div>
+  `).join('');
+  barrierListEl.querySelectorAll('.barrier-remove-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        await fetchJsonWithRetry(`/api/barriers/${id}`, { method: 'DELETE' }, 0);
+      } catch (err) {
+        // best-effort -- still clear it locally so the UI doesn't get stuck
+      }
+      if (barriers[id]) {
+        map.removeLayer(barriers[id].line);
+        delete barriers[id];
+      }
+      renderBarrierList();
+    });
+  });
+}
+
+async function handleBarrierClick(lonlat) {
+  if (!barrierFirstPoint) {
+    barrierFirstPoint = lonlat;
+    barrierFirstMarker = L.circleMarker([lonlat[1], lonlat[0]], {
+      radius: 5, color: '#b03030', weight: 2, fillColor: '#b03030', fillOpacity: 0.8,
+    }).addTo(map);
+    barrierHint.textContent = 'Click the second point to complete the barrier.';
+    return;
+  }
+  const start = barrierFirstPoint;
+  const end = lonlat;
+  barrierHint.textContent = 'Adding barrier…';
+  try {
+    const data = await fetchJsonWithRetry('/api/barriers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ start, end }),
+    }, 0);
+    const line = L.polyline([[start[1], start[0]], [end[1], end[0]]], {
+      color: '#b03030', weight: 3, dashArray: '6,6',
+    }).addTo(map).bindTooltip(`Fictional barrier — ${data.blocked_edges} segment${data.blocked_edges === 1 ? '' : 's'} blocked`);
+    barriers[data.id] = { line, blockedEdges: data.blocked_edges };
+    renderBarrierList();
+  } catch (err) {
+    alert('Could not add barrier: ' + err);
+  }
+  if (barrierFirstMarker) { map.removeLayer(barrierFirstMarker); barrierFirstMarker = null; }
+  setBarrierDrawMode(false);
+}
 
 let originPoint = null;      // [lon, lat]
 let destPoint = null;        // [lon, lat]
@@ -624,6 +717,10 @@ tideCheckBtn.addEventListener('click', () => {
 
 map.on('click', (e) => {
   const lonlat = [e.latlng.lng, e.latlng.lat];
+  if (barrierDrawMode) {
+    handleBarrierClick(lonlat);
+    return;
+  }
   if (!originPoint) {
     setOrigin(lonlat, null);
   } else if (!destPoint) {
