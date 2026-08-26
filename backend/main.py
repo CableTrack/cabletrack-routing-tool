@@ -394,11 +394,11 @@ def get_windfarms():
             resp = client.post(OVERPASS_URL, data={"data": _WINDFARM_QUERY})
             resp.raise_for_status()
             data = resp.json()
-    except httpx.HTTPError:
+    except httpx.HTTPError as e:
         # Serve stale cache rather than nothing if Overpass is unreachable.
         if _windfarm_cache:
             return {"windfarms": _windfarm_cache[1], "cached": True, "stale": True}
-        return {"error": "Couldn't reach the windfarm data source (OpenStreetMap Overpass API). Try again shortly."}
+        return {"error": "Couldn't reach the windfarm data source (OpenStreetMap Overpass API). Try again shortly.", "debug": f"{type(e).__name__}: {e}"}
     finally:
         socket.getaddrinfo = _orig_getaddrinfo
 
