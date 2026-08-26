@@ -209,7 +209,7 @@
       <input type="checkbox" id="windfarm-toggle-input">
       <span>Show offshore windfarms (worldwide)</span>
     </label>
-    <p class="hint depth-hint" id="windfarm-hint" style="display:none;">OpenStreetMap community data &mdash; green = operational, orange = under construction, grey (dashed) = planned. Not an authoritative register; recently announced projects may be missing. Click a marker for name/operator/capacity.</p>
+    <p class="hint depth-hint" id="windfarm-hint" style="display:none;">OpenStreetMap community data &mdash; green = operational, orange = under construction, grey (dashed) = planned. Not an authoritative register; recently announced projects may be missing. Click a marker to use it as your start/destination and see its details.</p>
 
     <div id="single-mode-section">
       <div class="field-group">
@@ -457,6 +457,19 @@ windfarmToggleInput.addEventListener('change', async () => {
         w.capacity ? `Capacity: ${escapeHtml(w.capacity)}` : null,
       ].filter(Boolean);
       marker.bindPopup(lines.join('<br>'));
+      // Windfarm markers eat the click before it reaches the map (Leaflet
+      // stops propagation on marker click), so without this a click on a
+      // windfarm just opens its popup and never sets a route point. Mirror
+      // the same first-click-is-start, second-click-is-destination logic
+      // the plain map click handler uses below.
+      marker.on('click', () => {
+        const lonlat = [w.lon, w.lat];
+        if (!originPoint) {
+          setOrigin(lonlat, w.name);
+        } else if (!destPoint) {
+          setDest(lonlat, w.name);
+        }
+      });
       return marker;
     });
     windfarmOverlayLayer = L.layerGroup(markers).addTo(map);
