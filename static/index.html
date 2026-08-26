@@ -203,7 +203,7 @@
       <input type="checkbox" id="tidal-overlay-toggle-input">
       <span>Show tidal range (worldwide)</span>
     </label>
-    <p class="hint depth-hint" id="tidal-overlay-hint" style="display:none;">Global tidal range in metres, derived from the FES2014 harmonic model (Aviso+/CNES). Rough, large-scale picture only -- for a specific port's actual range, use "Check tidal range" below instead.</p>
+    <p class="hint depth-hint" id="tidal-overlay-hint" style="display:none;">Worldwide tidal zones from the FES2014 model (Aviso+/CNES) &mdash; blue = microtidal (&lt;2m), orange = mesotidal (2&ndash;4m), red = macrotidal (&gt;4m). Coarse classification only -- for a specific port's actual range, use "Check tidal range" below instead.</p>
 
     <div id="single-mode-section">
       <div class="field-group">
@@ -326,33 +326,66 @@ depthToggleInput.addEventListener('change', () => {
   }
 });
 
-// --- Worldwide tidal range overlay (Esri / FES2014) ------------------------
+// --- Worldwide tidal range overlay (Esri / FES2014, classified) -----------
 // A rough, whole-ocean picture of tidal range -- separate from the precise
 // per-port "Check tidal range" lookup below, and doesn't touch the TideCheck
-// API budget at all since it's just map tiles, not per-point API calls.
-// Esri hosts a public, pre-cached tile layer computed from the FES2014
-// harmonic model (2*(M2+S2+K1+O1) constituent amplitudes) -- same underlying
-// science as tide-station predictions, just gridded globally instead of
-// computed per-station. License (Aviso+) explicitly permits any derivative
-// use, commercial included. Standard XYZ tile scheme, no API key required
-// for this public item.
-const tidalOverlayLayer = L.tileLayer(
-  'https://tiledimageservices.arcgis.com/bDAhvQYMG4WL8O5o/arcgis/rest/services/Global_Tidal_Range_meters2/ImageServer/tile/{z}/{y}/{x}',
-  {
-    opacity: 0.6,
-    maxZoom: 12,
-    attribution: 'Global tidal range: Esri, FES2014 (Aviso+/CNES/Legos/CLS/Noveltis)',
-  }
-);
+// API budget at all since it's a one-off vector fetch, not per-point API calls.
+//
+// Esri also hosts this same FES2014-derived data as a raw analytical raster
+// (LERC-encoded float tiles), which is what a first pass at this used --
+// that turned out to need a client-side LERC decoder plus a hand-built
+// colour ramp to render at all, since browsers can't display LERC via a
+// plain <img>/tile layer. This uses their pre-classified polygon layer
+// instead (micro/meso/macrotidal bands, same underlying model) -- plain
+// GeoJSON, renders with Leaflet directly, no extra decoding library needed.
+// Fetched once on first use and cached in `tidalOverlayGeoJSON`, not on
+// page load, since most sessions won't toggle it on.
+const TIDAL_ZONE_COLORS = {
+  Microtidal: '#4a90d9',   // < 2m
+  Mesotidal: '#e8a33d',    // 2-4m
+  Macrotidal: '#c0392b',   // > 4m
+};
+let tidalOverlayLayer = null;
+let tidalOverlayLoading = false;
 const tidalOverlayToggleInput = document.getElementById('tidal-overlay-toggle-input');
 const tidalOverlayHint = document.getElementById('tidal-overlay-hint');
-tidalOverlayToggleInput.addEventListener('change', () => {
-  if (tidalOverlayToggleInput.checked) {
-    tidalOverlayLayer.addTo(map);
-    tidalOverlayHint.style.display = 'block';
-  } else {
-    map.removeLayer(tidalOverlayLayer);
+tidalOverlayToggleInput.addEventListener('change', async () => {
+  if (!tidalOverlayToggleInput.checked) {
+    if (tidalOverlayLayer) map.removeLayer(tidalOverlayLayer);
     tidalOverlayHint.style.display = 'none';
+    return;
+  }
+  tidalOverlayHint.style.display = 'block';
+  if (tidalOverlayLayer) {
+    tidalOverlayLayer.addTo(map);
+    return;
+  }
+  if (tidalOverlayLoading) return;
+  tidalOverlayLoading = true;
+  const originalHintText = tidalOverlayHint.textContent;
+  tidalOverlayHint.textContent = 'Loading worldwide tidal zones…';
+  try {
+    const data = await fetchJsonWithRetry(
+      'https://services.arcgis.com/bDAhvQYMG4WL8O5o/arcgis/rest/services/Global_Tidal_Range/FeatureServer/0/query'
+      + '?where=1%3D1&outFields=Tide&returnGeometry=true&resultRecordCount=1000&f=geojson',
+      {}, 1
+    );
+    tidalOverlayLayer = L.geoJSON(data, {
+      style: (feature) => ({
+        color: 'transparent',
+        fillColor: TIDAL_ZONE_COLORS[feature.properties.Tide] || '#999',
+        fillOpacity: 0.5,
+      }),
+      onEachFeature: (feature, layer) => {
+        layer.bindTooltip(feature.properties.Tide || 'Unknown');
+      },
+    }).addTo(map);
+    tidalOverlayHint.textContent = originalHintText;
+  } catch (err) {
+    tidalOverlayHint.textContent = 'Couldn\'t load worldwide tidal zones right now.';
+    tidalOverlayToggleInput.checked = false;
+  } finally {
+    tidalOverlayLoading = false;
   }
 });
 
