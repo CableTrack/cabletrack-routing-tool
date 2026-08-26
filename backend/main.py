@@ -113,15 +113,31 @@ def get_route(req: RouteRequest):
 # network it routes over (`sr.setup_M()`) is just a plain graph of
 # (lon, lat) nodes and weighted edges, so we can block a stretch ourselves:
 # find every edge whose segment crosses a barrier line the user draws, and
-# set its weight to infinity so Dijkstra can never use it. Restoring a
-# barrier puts the original weights back.
+# remove it from the graph so Dijkstra can never use it. Restoring a
+# barrier re-adds the original edges with their original attributes.
+#
+# Note: setting an edge's weight to float('inf') instead of removing it
+# does NOT reliably work here -- networkx's bidirectional_dijkstra (which
+# Marnet.shortest_path uses) doesn't always respect an infinite weight at
+# the point where the two search fronts meet when a custom weight function
+# is supplied, so the "blocked" edge could still end up in the returned
+# path with the graph's original finite length. Confirmed by direct testing
+# against the installed searoute==1.6.0. Removing the edge outright sidesteps
+# this and forces a genuine, correctly-costed detour.
 #
 # This mutates the single shared graph instance that every /api/route call
 # uses (searoute-py caches it process-wide via lru_cache), so a barrier is
 # effectively global to this server -- fine for a single-user test/demo
 # tool, but note it isn't per-session and won't survive a server restart.
+#
+# IMPORTANT: sr.setup_M must be called positionally (sr.setup_M("networkx")),
+# never as a keyword (sr.setup_M(backend="networkx")) -- functools.lru_cache
+# treats those as two different cache keys, so a keyword call here would
+# build and mutate an entirely separate, unused Marnet graph instead of the
+# one /api/route actually reads (this was the original bug that made the
+# first version of this feature silently do nothing).
 # ---------------------------------------------------------------------------
-_active_barriers = {}  # id -> {"start": [lon,lat], "end": [lon,lat], "edges": [(u, v, orig_weight), ...]}
+_active_barriers = {}  # id -> {"start": [lon,lat], "end": [lon,lat], "edges": [(u, v, orig_edge_data_dict), ...]}
 
 
 def _orient(a, b, c):
@@ -170,19 +186,21 @@ class BarrierRequest(BaseModel):
 
 @app.post("/api/barriers")
 def add_barrier(req: BarrierRequest):
-    # Must match the backend the plain /api/route call above uses (its
-    # default), or we'd be mutating a different, unused graph instance.
-    M = sr.setup_M(backend="networkx")
-    blocked = []
+    M = sr.setup_M("networkx")
+    # Collect crossing edges first -- mutating M.edges() while iterating it
+    # is unsafe, and remove_edge() needs the full attribute dict up front
+    # so we can restore it exactly on delete.
+    to_remove = []
     for u, v, data in M.edges(data=True):
         if not _bbox_overlap(u, v, req.start, req.end):
             continue
         if _segments_intersect(u, v, req.start, req.end):
-            blocked.append((u, v, data.get("weight")))
-            data["weight"] = float("inf")
+            to_remove.append((u, v, dict(data)))
+    for u, v, _ in to_remove:
+        M.remove_edge(u, v)
     barrier_id = str(uuid.uuid4())[:8]
-    _active_barriers[barrier_id] = {"start": req.start, "end": req.end, "edges": blocked}
-    return {"id": barrier_id, "blocked_edges": len(blocked)}
+    _active_barriers[barrier_id] = {"start": req.start, "end": req.end, "edges": to_remove}
+    return {"id": barrier_id, "blocked_edges": len(to_remove)}
 
 
 @app.get("/api/barriers")
@@ -198,11 +216,11 @@ def remove_barrier(barrier_id: str):
     barrier = _active_barriers.pop(barrier_id, None)
     if not barrier:
         return {"error": "Barrier not found"}
-    M = sr.setup_M(backend="networkx")
+    M = sr.setup_M("networkx")
     restored = 0
-    for u, v, orig_weight in barrier["edges"]:
-        if M.has_edge(u, v):
-            M[u][v]["weight"] = orig_weight
+    for u, v, orig_data in barrier["edges"]:
+        if not M.has_edge(u, v):
+            M.add_edge(u, v, **orig_data)
             restored += 1
     return {"restored_edges": restored}
 
