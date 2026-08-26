@@ -18,10 +18,22 @@ import time
 import httpx
 import searoute as sr
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 app = FastAPI(title="CableTrack Routing Tool Prototype")
+
+# Scoped to the main CableTrack site only, GET only -- lets the route-planner
+# interstitial page on cabletrack.co.uk call /api/ports/search cross-origin
+# (both to run the port autocomplete and as a wake-up ping for the free-tier
+# cold start) before handing off to this tool. Not a wildcard/open policy.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://cabletrack.co.uk"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 # ---------------------------------------------------------------------------
 # Port search data -- reuse searoute-py's own bundled port list (3,962 ports)
