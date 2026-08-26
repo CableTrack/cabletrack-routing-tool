@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>CableTrack Routing Tool — Prototype</title>
+<title>CableTrack Routing Tool</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/vendor/leaflet.css" />
 <style>
@@ -196,7 +196,7 @@
   <div id="map"></div>
   <div id="panel">
     <h1>CableTrack Routing Tool</h1>
-    <p class="subtitle">Prototype — planning/estimation only, not for navigation</p>
+    <p class="subtitle">Planning/estimation only, not for navigation</p>
 
     <div class="mode-toggle">
       <button type="button" class="mode-btn active" id="mode-single-btn">Single route</button>
@@ -455,7 +455,46 @@ windfarmToggleInput.addEventListener('change', async () => {
   try {
     const data = await fetchJsonWithRetry('/api/windfarms', {}, 1);
     if (data.error) throw new Error(data.error);
-    const markers = (data.windfarms || []).filter(w => w.name !== 'Unnamed wind farm').flatMap(w => {
+    const windfarmPoints = (data.windfarms || []).filter(w => w.name !== 'Unnamed wind farm');
+    // Windfarms cluster tightly worldwide (the North Sea especially), so at
+    // low/whole-map zoom levels many windfarms' click targets -- even the
+    // plain 5px dot, let alone the enlarged hit circle below -- overlap each
+    // other on screen. When that happens the browser's native click just
+    // lands on whichever overlapping shape happens to be topmost in paint
+    // order, which is often NOT the windfarm nearest the cursor -- e.g.
+    // clicking directly on Egmond aan Zee resolved to Norfolk Vanguard East,
+    // over 100km away. Fix: never trust which marker's own handler fired --
+    // every windfarm click re-resolves against the *actual* click pixel and
+    // picks the geographically-nearest windfarm to it, so the result is
+    // always correct regardless of which overlapping element caught the
+    // native event.
+    function nearestWindfarm(containerPoint) {
+      let best = null, bestD = Infinity;
+      for (const cand of windfarmPoints) {
+        const p = map.latLngToContainerPoint([cand.lat, cand.lon]);
+        const d = (p.x - containerPoint.x) ** 2 + (p.y - containerPoint.y) ** 2;
+        if (d < bestD) { bestD = d; best = cand; }
+      }
+      return best;
+    }
+    const handleWindfarmClick = (e) => {
+      const w = nearestWindfarm(e.containerPoint);
+      if (!w) return;
+      const lonlat = [w.lon, w.lat];
+      if (barrierDrawMode) {
+        handleBarrierClick(lonlat);
+        return;
+      }
+      if (!originPoint) {
+        setOrigin(lonlat, w.name);
+      } else if (!destPoint) {
+        setDest(lonlat, w.name);
+      } else {
+        clearRoute();
+        setOrigin(lonlat, w.name);
+      }
+    };
+    const markers = windfarmPoints.flatMap(w => {
       const style = WINDFARM_STATUS_STYLE[w.status] || WINDFARM_STATUS_STYLE.operational;
       const marker = L.circleMarker([w.lat, w.lon], {
         radius: 5,
@@ -474,25 +513,7 @@ windfarmToggleInput.addEventListener('change', async () => {
       marker.bindPopup(lines.join('<br>'));
       // Windfarm markers eat the click before it reaches the map (Leaflet
       // stops propagation on marker click), so without this a click on a
-      // windfarm just opens its popup and never sets a route point. Mirror
-      // the same first-click-is-start, second-click-is-destination logic
-      // the plain map click handler uses below (including the "both
-      // already set -- start over from here" branch).
-      const handleWindfarmClick = () => {
-        const lonlat = [w.lon, w.lat];
-        if (barrierDrawMode) {
-          handleBarrierClick(lonlat);
-          return;
-        }
-        if (!originPoint) {
-          setOrigin(lonlat, w.name);
-        } else if (!destPoint) {
-          setDest(lonlat, w.name);
-        } else {
-          clearRoute();
-          setOrigin(lonlat, w.name);
-        }
-      };
+      // windfarm just opens its popup and never sets a route point.
       marker.on('click', handleWindfarmClick);
       // The visible dot is only 5px radius -- a genuinely small target to
       // hit with a real mouse/trackpad, and clicks that miss it just fall
@@ -500,7 +521,9 @@ windfarmToggleInput.addEventListener('change', async () => {
       // location instead of the windfarm). Layer an invisible, larger
       // circle underneath sharing the same click handler and popup so the
       // effective click target is much bigger without changing how the
-      // marker looks.
+      // marker looks. Which exact shape catches the click no longer
+      // matters -- handleWindfarmClick re-resolves the nearest real
+      // windfarm from the click position itself.
       const hitArea = L.circleMarker([w.lat, w.lon], {
         radius: 12,
         stroke: false,
