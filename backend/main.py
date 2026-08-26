@@ -13,6 +13,7 @@ Then open http://localhost:8000 in a browser.
 import json
 import math
 import os
+import socket
 import time
 
 import httpx
@@ -376,16 +377,30 @@ def get_windfarms():
     if _windfarm_cache and (now - _windfarm_cache[0]) < _WINDFARM_CACHE_TTL_S:
         return {"windfarms": _windfarm_cache[1], "cached": True}
 
+    # Render's containers appear to lack an outbound IPv6 route, but Overpass's
+    # hostname also resolves an AAAA record -- if the resolver returns that
+    # first, the connection fails with "Network is unreachable" rather than
+    # falling back to IPv4 (confirmed via a temporary debug response). Force
+    # IPv4-only DNS resolution for the duration of this call rather than for
+    # the whole process.
+    _orig_getaddrinfo = socket.getaddrinfo
+
+    def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
     try:
+        socket.getaddrinfo = _ipv4_only_getaddrinfo
         with httpx.Client(timeout=70) as client:
             resp = client.post(OVERPASS_URL, data={"data": _WINDFARM_QUERY})
             resp.raise_for_status()
             data = resp.json()
-    except httpx.HTTPError as e:
+    except httpx.HTTPError:
         # Serve stale cache rather than nothing if Overpass is unreachable.
         if _windfarm_cache:
             return {"windfarms": _windfarm_cache[1], "cached": True, "stale": True}
-        return {"error": "Couldn't reach the windfarm data source (OpenStreetMap Overpass API). Try again shortly.", "debug": f"{type(e).__name__}: {e}"}
+        return {"error": "Couldn't reach the windfarm data source (OpenStreetMap Overpass API). Try again shortly."}
+    finally:
+        socket.getaddrinfo = _orig_getaddrinfo
 
     windfarms = []
     for el in data.get("elements", []):
