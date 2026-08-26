@@ -451,7 +451,7 @@ windfarmToggleInput.addEventListener('change', async () => {
   try {
     const data = await fetchJsonWithRetry('/api/windfarms', {}, 1);
     if (data.error) throw new Error(data.error);
-    const markers = (data.windfarms || []).filter(w => w.name !== 'Unnamed wind farm').map(w => {
+    const markers = (data.windfarms || []).filter(w => w.name !== 'Unnamed wind farm').flatMap(w => {
       const style = WINDFARM_STATUS_STYLE[w.status] || WINDFARM_STATUS_STYLE.operational;
       const marker = L.circleMarker([w.lat, w.lon], {
         radius: 5,
@@ -472,16 +472,35 @@ windfarmToggleInput.addEventListener('change', async () => {
       // stops propagation on marker click), so without this a click on a
       // windfarm just opens its popup and never sets a route point. Mirror
       // the same first-click-is-start, second-click-is-destination logic
-      // the plain map click handler uses below.
-      marker.on('click', () => {
+      // the plain map click handler uses below (including the "both
+      // already set -- start over from here" branch).
+      const handleWindfarmClick = () => {
         const lonlat = [w.lon, w.lat];
         if (!originPoint) {
           setOrigin(lonlat, w.name);
         } else if (!destPoint) {
           setDest(lonlat, w.name);
+        } else {
+          clearRoute();
+          setOrigin(lonlat, w.name);
         }
+      };
+      marker.on('click', handleWindfarmClick);
+      // The visible dot is only 5px radius -- a genuinely small target to
+      // hit with a real mouse/trackpad, and clicks that miss it just fall
+      // through to the map underneath (setting a point at the click
+      // location instead of the windfarm). Layer an invisible, larger
+      // circle underneath sharing the same click handler and popup so the
+      // effective click target is much bigger without changing how the
+      // marker looks.
+      const hitArea = L.circleMarker([w.lat, w.lon], {
+        radius: 12,
+        stroke: false,
+        fillOpacity: 0,
       });
-      return marker;
+      hitArea.on('click', handleWindfarmClick);
+      hitArea.bindPopup(lines.join('<br>'));
+      return [hitArea, marker];
     });
     windfarmOverlayLayer = L.layerGroup(markers).addTo(map);
     windfarmHint.textContent = originalHintText;
@@ -552,6 +571,23 @@ async function fetchTideInfo(lonlat, targetEl) {
   }
 }
 
+function clearRoute() {
+  originPoint = null; destPoint = null;
+  if (originMarker) map.removeLayer(originMarker);
+  if (destMarker) map.removeLayer(destMarker);
+  if (routeLayer) map.removeLayer(routeLayer);
+  originMarker = destMarker = routeLayer = null;
+  originInput.value = ''; destInput.value = '';
+  originTideEl.style.display = 'none';
+  destTideEl.style.display = 'none';
+  recalcBtn.disabled = true;
+  editHint.style.display = 'none';
+  passageNote.style.display = 'none';
+  approachWarning.style.display = 'none';
+  document.getElementById('results').innerHTML = '<div id="placeholder">Set a start point and destination to generate a route.</div>';
+  updateGenerateEnabled();
+}
+
 function setOrigin(lonlat, label) {
   originPoint = lonlat;
   if (originMarker) map.removeLayer(originMarker);
@@ -592,25 +628,15 @@ map.on('click', (e) => {
     setOrigin(lonlat, null);
   } else if (!destPoint) {
     setDest(lonlat, null);
+  } else {
+    // Both already set -- a further click used to be a silent no-op, which
+    // just looked broken. Start a fresh route from here instead.
+    clearRoute();
+    setOrigin(lonlat, null);
   }
 });
 
-resetBtn.addEventListener('click', () => {
-  originPoint = null; destPoint = null;
-  if (originMarker) map.removeLayer(originMarker);
-  if (destMarker) map.removeLayer(destMarker);
-  if (routeLayer) map.removeLayer(routeLayer);
-  originMarker = destMarker = routeLayer = null;
-  originInput.value = ''; destInput.value = '';
-  originTideEl.style.display = 'none';
-  destTideEl.style.display = 'none';
-  updateGenerateEnabled();
-  recalcBtn.disabled = true;
-  editHint.style.display = 'none';
-  passageNote.style.display = 'none';
-  approachWarning.style.display = 'none';
-  document.getElementById('results').innerHTML = '<div id="placeholder">Set a start point and destination to generate a route.</div>';
-});
+resetBtn.addEventListener('click', clearRoute);
 
 // --- Port search autocomplete -------------------------------------------
 function wireAutocomplete(input, listEl, onPick) {
