@@ -140,6 +140,16 @@
     border-radius: 6px;
     display: none;
   }
+  #approach-warning {
+    margin-top: 10px;
+    font-size: 12px;
+    background: #fdf3e3;
+    color: #7a5410;
+    padding: 8px 10px;
+    border-radius: 6px;
+    display: none;
+    line-height: 1.4;
+  }
   #placeholder { color: var(--muted); font-size: 13px; padding: 8px 0; }
   .placeholder-text { color: var(--muted); font-size: 13px; padding: 8px 0; }
 
@@ -293,6 +303,7 @@
       <div id="compare-placeholder" class="placeholder-text">Add at least one route above, then click Compare routes.</div>
     </div>
     <div id="passage-note"></div>
+    <div id="approach-warning"></div>
   </div>
 </div>
 
@@ -498,6 +509,7 @@ const recalcBtn = document.getElementById('recalc-btn');
 const resetBtn = document.getElementById('reset-btn');
 const editHint = document.getElementById('edit-hint');
 const passageNote = document.getElementById('passage-note');
+const approachWarning = document.getElementById('approach-warning');
 const originTideEl = document.getElementById('origin-tide');
 const destTideEl = document.getElementById('dest-tide');
 const tideCheckBtn = document.getElementById('tide-check-btn');
@@ -596,6 +608,7 @@ resetBtn.addEventListener('click', () => {
   recalcBtn.disabled = true;
   editHint.style.display = 'none';
   passageNote.style.display = 'none';
+  approachWarning.style.display = 'none';
   document.getElementById('results').innerHTML = '<div id="placeholder">Set a start point and destination to generate a route.</div>';
 });
 
@@ -630,6 +643,18 @@ function wireAutocomplete(input, listEl, onPick) {
 wireAutocomplete(originInput, originList, setOrigin);
 wireAutocomplete(destInput, destList, setDest);
 
+// Great-circle distance in nautical miles between [lon, lat] points -- used
+// only to sanity-check how far searoute-py's returned route actually lands
+// from the point we asked for (see below), not for the route itself.
+function haversineNm(a, b) {
+  const R_NM = 3440.065;
+  const toRad = (d) => d * Math.PI / 180;
+  const [lon1, lat1] = a, [lon2, lat2] = b;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R_NM * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+}
+
 // --- Route generation -----------------------------------------------------
 generateBtn.addEventListener('click', async () => {
   generateBtn.disabled = true;
@@ -640,7 +665,37 @@ generateBtn.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ origin: originPoint, destination: destPoint }),
     });
-    drawRoute(data.coordinates);
+    // searoute-py snaps to the nearest node on its own shipping-lane network
+    // rather than routing exactly to/from the point you gave it. For
+    // well-connected major ports that snap is tiny (well under a mile); for
+    // small ports up shallow or narrow channels it can be tens of miles,
+    // and the last real segments it does draw can cut across headlands or
+    // river mouths rather than hug the coast. We can't fix the underlying
+    // network resolution here, but we can (a) stitch the true point back
+    // onto the line so it doesn't look like a floating, disconnected pin,
+    // and (b) flag it clearly so it isn't mistaken for a precise approach --
+    // drag the line (per the hint above) to correct it before trusting the
+    // distance/cost numbers.
+    const coords = data.coordinates.slice();
+    const GAP_WARN_NM = 3;
+    const gapNotes = [];
+    const startGapNm = haversineNm(originPoint, coords[0]);
+    if (startGapNm > GAP_WARN_NM) {
+      coords.unshift(originPoint);
+      gapNotes.push(`start (${startGapNm.toFixed(1)} nm short of ${originInput.value || 'start point'})`);
+    }
+    const endGapNm = haversineNm(destPoint, coords[coords.length - 1]);
+    if (endGapNm > GAP_WARN_NM) {
+      coords.push(destPoint);
+      gapNotes.push(`destination (${endGapNm.toFixed(1)} nm short of ${destInput.value || 'destination'})`);
+    }
+    if (gapNotes.length) {
+      approachWarning.style.display = 'block';
+      approachWarning.textContent = `⚠ The routing engine's shipping-lane network doesn't fully resolve the approach at the ${gapNotes.join(' and ')}. The last stretch shown is a straight-line estimate, not a routed path -- drag it to follow the real channel before relying on the distance/cost below.`;
+    } else {
+      approachWarning.style.display = 'none';
+    }
+    drawRoute(coords);
     if (data.passages_used) {
       passageNote.style.display = 'block';
       passageNote.textContent = `Route uses: ${[].concat(data.passages_used).join(', ')}`;
@@ -831,6 +886,7 @@ function setMode(mode) {
   resultsSingleEl.style.display = isCompare ? 'none' : 'block';
   compareResultsWrap.style.display = isCompare ? 'block' : 'none';
   passageNote.style.display = 'none';
+  approachWarning.style.display = 'none';
   if (isCompare) {
     if (routeLayer) { map.removeLayer(routeLayer); }
     if (compareRows.length === 0) { addCompareRow(); addCompareRow(); }
