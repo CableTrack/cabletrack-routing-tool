@@ -108,14 +108,29 @@ def get_route(req: RouteRequest):
     # than a runtime dependency on the raw dataset -- that one's ~890MB in
     # RAM, more than a free-tier instance has to spare).
     coastal_hugging_fixed = False
+    network_gap_fixed = False
     if req.min_clearance_nm > 0:
         coords, coastal_hugging_fixed = coastal.apply_coastal_clearance(
             coords, clearance_nm=req.min_clearance_nm
         )
 
+        # A different problem to coastal hugging: searoute-py's network is a
+        # fixed graph, and in places it's missing an edge that would let two
+        # nearby, clear-water nodes connect directly -- forcing the shortest
+        # path onto a long detour via a distant hub instead. Measured off
+        # St David's Head: no edge from the Celtic Sea approach to the node
+        # right off the headland, ~53nm apart, so the route detoured ~120nm
+        # south via a hub near the Isles of Scilly and back. This looks for
+        # that specific pattern (a route stretch far longer than the direct,
+        # land-respecting distance between its own endpoints) and shortcuts
+        # it through the same local search used above. See coastal.py.
+        coords, network_gap_fixed = coastal.apply_detour_shortcuts(
+            coords, clearance_nm=req.min_clearance_nm
+        )
+
     # searoute-py's own reported length is for its original (uncorrected)
-    # path -- recompute when the coastal pass actually changed the geometry.
-    if coastal_hugging_fixed:
+    # path -- recompute when either pass actually changed the geometry.
+    if coastal_hugging_fixed or network_gap_fixed:
         distance_nm = sum(
             coastal.haversine_nm(coords[i], coords[i + 1]) for i in range(len(coords) - 1)
         )
@@ -130,6 +145,7 @@ def get_route(req: RouteRequest):
         # note never actually showed anything.
         "passages_used": route.properties.get("traversed_passages"),
         "coastal_hugging_fixed": coastal_hugging_fixed,
+        "network_gap_fixed": network_gap_fixed,
     }
 
 

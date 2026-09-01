@@ -223,6 +223,93 @@ def simplify_rdp(points, epsilon_nm=0.6):
     return [points[0], points[-1]]
 
 
+def apply_detour_shortcuts(
+    coords,
+    clearance_nm=3.0,
+    min_saving_nm=15.0,
+    min_saving_ratio=1.3,
+    max_direct_nm=70.0,
+    max_hops=4,
+    max_passes=3,
+):
+    """Fix a different problem to coastal hugging: gaps in searoute-py's own
+    maritime network graph. The network is a fixed set of nodes and edges --
+    in places it simply has no edge directly linking two nodes that are
+    close together and have clear water between them, forcing the shortest-
+    path search onto a much longer detour through a distant hub node.
+
+    We measured exactly this off St David's Head: the network has no edge
+    from the Celtic Sea approach (~51.25N, 5.9W) to the St David's Head node
+    (~51.16N, 4.5W) only ~53nm away -- the graph forces a detour via a hub
+    node ~120nm south near the Isles of Scilly instead.
+
+    This scans the route for stretches whose along-route distance is much
+    longer than the direct distance between the same two points, and where
+    a local A* search (the same engine used for coastal clearance, so the
+    replacement still respects land and the clearance distance) finds a
+    genuinely shorter path, splices that in. Bounded to `max_direct_nm` and
+    `max_hops` (route points spanned) so this only ever fires on a single
+    local network gap of the kind measured above, never on long-haul routes
+    that are legitimately curving around a landmass over many points -- a
+    local A* search over a span that large would either be meaningless or,
+    where land blocks the direct line, come back no shorter than the
+    original, but bounding the search space keeps this scoped to what it's
+    actually meant to fix rather than relying on that alone."""
+    coords = list(coords)
+    patched = False
+    for _ in range(max_passes):
+        n = len(coords)
+        if n < 3:
+            break
+        cum = [0.0]
+        for k in range(1, n):
+            cum.append(cum[-1] + haversine_nm(coords[k - 1], coords[k]))
+
+        candidates = []  # (estimated_saving, i, j)
+        for i in range(0, n - 2):
+            for j in range(i + 2, min(n, i + 1 + max_hops)):
+                direct = haversine_nm(coords[i], coords[j])
+                if direct < 1e-6 or direct > max_direct_nm:
+                    continue
+                along = cum[j] - cum[i]
+                if along - direct < min_saving_nm or along / direct < min_saving_ratio:
+                    continue
+                candidates.append((along - direct, i, j))
+
+        if not candidates:
+            break
+        # Try candidates biggest-estimated-saving first. Most will be
+        # rejected (a big apparent saving usually just means the direct
+        # chord cuts across land, e.g. straight through Wales itself for
+        # the route's own start/end pair) -- regional_reroute either fails
+        # to find a path in that case, or finds one no shorter than the
+        # original once it's actually forced around the obstacle, and the
+        # savings check below discards it either way. Keep trying down the
+        # list until one candidate is a genuine, land-respecting shortcut.
+        candidates.sort(key=lambda c: -c[0])
+        applied = False
+        for _, i, j in candidates[:20]:
+            along = cum[j] - cum[i]
+            reroute = regional_reroute(coords[i], coords[j], clearance_nm=clearance_nm, margin_nm=40.0)
+            if reroute is None:
+                continue
+            reroute_len = sum(haversine_nm(reroute[k], reroute[k + 1]) for k in range(len(reroute) - 1))
+            if along - reroute_len < 5.0:
+                # Not actually an improvement once routed properly (land
+                # was probably in the way of the direct line) -- try the
+                # next candidate instead of giving up altogether.
+                continue
+            simplified = simplify_rdp(reroute, epsilon_nm=0.6)
+            coords[i:j + 1] = simplified
+            patched = True
+            applied = True
+            break
+        if not applied:
+            break
+
+    return coords, patched
+
+
 def apply_coastal_clearance(coords, clearance_nm=3.0, check_radius_nm=20.0):
     """Walk a searoute-style [[lon,lat], ...] route and re-route any interior
     stretch that comes closer than clearance_nm to land. The route's actual
