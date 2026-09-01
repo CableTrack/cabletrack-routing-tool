@@ -842,9 +842,16 @@ generateBtn.addEventListener('click', async () => {
       approachWarning.style.display = 'none';
     }
     drawRoute(coords);
-    if (data.passages_used) {
+    const routeNotes = [];
+    if (data.passages_used && data.passages_used.length) {
+      routeNotes.push(`Route uses: ${[].concat(data.passages_used).join(', ')}`);
+    }
+    if (data.coastal_hugging_fixed) {
+      routeNotes.push('Adjusted to keep clear water off headlands where the raw route hugged the coast.');
+    }
+    if (routeNotes.length) {
       passageNote.style.display = 'block';
-      passageNote.textContent = `Route uses: ${[].concat(data.passages_used).join(', ')}`;
+      passageNote.textContent = routeNotes.join(' — ');
     } else {
       passageNote.style.display = 'none';
     }
