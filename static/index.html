@@ -53,7 +53,7 @@
     color: var(--muted);
     margin-bottom: 4px;
   }
-  input[type="text"], input[type="number"] {
+  input[type="text"], input[type="number"], input[type="email"] {
     width: 100%;
     padding: 8px 10px;
     border: 1px solid var(--border);
@@ -189,6 +189,35 @@
     border-radius: 6px;
     margin-top: 10px;
   }
+
+  /* Export-PDF modal */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(11,45,77,0.45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .modal-box {
+    position: relative;
+    width: min(100%, 420px);
+    max-height: 88vh; overflow-y: auto;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 20px 60px rgba(11,45,77,0.25);
+  }
+  .modal-box h3 { margin: 0 0 6px 0; color: var(--navy); font-size: 16px; }
+  .modal-box p { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+  .icon-btn {
+    background: none; border: none; color: var(--muted); font-size: 15px;
+    cursor: pointer; padding: 4px; line-height: 1; flex: none;
+  }
+  .icon-btn:hover { color: var(--text); }
+  .checkbox-row { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0; }
+  .checkbox-row input[type="checkbox"] { width: 16px; height: 16px; margin-top: 2px; flex: none; }
+  .checkbox-row label { font-size: 11.5px; color: var(--muted); text-transform: none; font-weight: 400; letter-spacing: normal; }
+  #export-error { display: none; color: #c0392b; font-size: 12px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -308,6 +337,50 @@
     </div>
     <div id="passage-note"></div>
     <div id="approach-warning"></div>
+    <button type="button" class="btn-secondary" id="export-pdf-btn" style="width:100%; margin-top: 14px;" disabled>📄 Download Branded PDF Report</button>
+  </div>
+</div>
+
+<!-- ============ EXPORT MODAL ============ -->
+<div class="modal-overlay" id="export-overlay" style="display:none;">
+  <div class="modal-box">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+      <h3>Download PDF Report</h3>
+      <button type="button" class="icon-btn" id="close-export-btn" aria-label="Close">✕</button>
+    </div>
+    <div id="export-form-view">
+      <p>Leave a few details and we'll generate a branded PDF report &mdash; route summary, cost/transit breakdown, ready to save or share internally.</p>
+      <form id="export-form">
+        <div class="field-group">
+          <label for="exp-name">Name *</label>
+          <input type="text" id="exp-name" required>
+        </div>
+        <div class="field-group">
+          <label for="exp-company">Company</label>
+          <input type="text" id="exp-company">
+        </div>
+        <div class="field-group">
+          <label for="exp-position">Position</label>
+          <input type="text" id="exp-position">
+        </div>
+        <div class="field-group">
+          <label for="exp-email">Email *</label>
+          <input type="email" id="exp-email" required>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="exp-consent" required>
+          <label for="exp-consent">Your details will be sent to CableTrack and may be used to follow up about this tool. We won't share them with third parties. Unticking this means you can still view your result on-screen, but we can't send you the export.</label>
+        </div>
+        <div id="export-error"></div>
+        <button type="submit" class="btn-primary" id="export-submit-btn" style="width:100%; margin-top: 8px;">Generate My PDF Report</button>
+      </form>
+    </div>
+    <div id="export-success-view" style="display:none;">
+      <h3 style="margin-top:10px;">Your PDF is downloading</h3>
+      <p>Check your browser's downloads. If nothing happened, your browser may have blocked the download &mdash; click below to try again.</p>
+      <button type="button" class="btn-secondary" id="retry-download-btn" style="width:100%; margin-top: 10px;">&#8635; Download Again</button>
+      <button type="button" class="btn-secondary" id="close-export-success-btn" style="width:100%; margin-top: 8px;">Close</button>
+    </div>
   </div>
 </div>
 
@@ -634,6 +707,8 @@ let originMarker = null;
 let destMarker = null;
 let routeLayer = null;
 let routeIsDirty = false;
+let lastRouteMeta = null;   // { passages_used, coastal_hugging_fixed, network_gap_fixed, gapNotes } for the current single route, used by PDF export
+let lastSingleStats = null; // last /api/stats response for the current single route, used by PDF export
 
 const originInput = document.getElementById('origin-input');
 const destInput = document.getElementById('dest-input');
@@ -701,6 +776,9 @@ function clearRoute() {
   passageNote.style.display = 'none';
   approachWarning.style.display = 'none';
   document.getElementById('results').innerHTML = '<div id="placeholder">Set a start point and destination to generate a route.</div>';
+  lastRouteMeta = null;
+  lastSingleStats = null;
+  updateExportButton();
   updateGenerateEnabled();
 }
 
@@ -858,6 +936,12 @@ generateBtn.addEventListener('click', async () => {
     } else {
       passageNote.style.display = 'none';
     }
+    lastRouteMeta = {
+      passages_used: data.passages_used || [],
+      coastal_hugging_fixed: !!data.coastal_hugging_fixed,
+      network_gap_fixed: !!data.network_gap_fixed,
+      gapNotes,
+    };
     routeIsDirty = false;
     editHint.style.display = 'none';
     recalcBtn.disabled = false;
@@ -940,6 +1024,8 @@ async function fetchJsonWithRetry(url, options, retries = 1) {
 function showStatsError(err) {
   document.getElementById('results').innerHTML =
     '<div id="placeholder">Couldn\'t calculate stats (' + err.message + '). Try Recalculate again.</div>';
+  lastSingleStats = null;
+  updateExportButton();
 }
 
 async function recalcStats() {
@@ -971,6 +1057,8 @@ async function recalcStats() {
     body: JSON.stringify(payload),
   });
   renderResults(s);
+  lastSingleStats = s;
+  updateExportButton();
   routeIsDirty = false;
   editHint.style.display = 'none';
 }
@@ -1051,6 +1139,7 @@ function setMode(mode) {
     if (routeLayer) { routeLayer.addTo(map); }
   }
   syncRecalcButton();
+  updateExportButton();
 }
 
 // The Recalculate button is shared by both modes (it sits below the speed/
@@ -1142,6 +1231,7 @@ clearRoutesBtn.addEventListener('click', () => {
   compareResultsData = [];
   compareResultsWrap.innerHTML = '<div id="compare-placeholder" class="placeholder-text">Add at least one route above, then click Compare routes.</div>';
   updateCompareControls();
+  updateExportButton();
 });
 
 function updateCompareControls() {
@@ -1223,6 +1313,7 @@ compareBtn.addEventListener('click', async () => {
 
   if (bounds.length) map.fitBounds(bounds, { padding: [30, 30] });
   renderCompareTable();
+  updateExportButton();
 
   compareBtn.disabled = false;
   compareBtn.textContent = originalLabel;
@@ -1335,6 +1426,417 @@ function renderCompareTable() {
   window.history.replaceState({}, '', window.location.pathname);
   setTimeout(() => { if (!generateBtn.disabled) generateBtn.click(); }, 300);
 })();
+
+// --- Export as branded PDF -------------------------------------------------
+// Same pattern used on the J-tube calculator (cabletrack.co.uk): a short
+// name/company/email form gates the download, the lead is sent to CableTrack
+// via Web3Forms (fire-and-forget -- a failure there never blocks the PDF
+// itself), and the PDF is built client-side with jsPDF so there's no server
+// round-trip or file storage involved.
+const WEB3FORMS_KEY = 'd4909213-95a6-4f97-894f-730584024d6b';
+const JSPDF_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+let jsPdfLoadPromise = null;
+let lastLeadInfo = null;
+
+function loadJsPDF() {
+  if (window.jspdf && window.jspdf.jsPDF) return Promise.resolve();
+  if (jsPdfLoadPromise) return jsPdfLoadPromise;
+  jsPdfLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = JSPDF_URL;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Could not load PDF engine'));
+    document.head.appendChild(script);
+  });
+  return jsPdfLoadPromise;
+}
+
+const exportPdfBtn = document.getElementById('export-pdf-btn');
+const exportOverlay = document.getElementById('export-overlay');
+const exportFormView = document.getElementById('export-form-view');
+const exportSuccessView = document.getElementById('export-success-view');
+const exportForm = document.getElementById('export-form');
+const exportErrorEl = document.getElementById('export-error');
+const exportSubmitBtn = document.getElementById('export-submit-btn');
+
+// Which report to build -- set fresh each time the modal opens, since the
+// button is shared between single and compare mode.
+let exportContext = 'single';
+
+function updateExportButton() {
+  const isCompare = compareModeSection.style.display !== 'none';
+  if (isCompare) {
+    const ok = compareResultsData.some(r => r.ok);
+    exportPdfBtn.disabled = !ok;
+  } else {
+    exportPdfBtn.disabled = !lastSingleStats;
+  }
+}
+
+function openExportModal() {
+  exportContext = compareModeSection.style.display !== 'none' ? 'compare' : 'single';
+  exportFormView.style.display = '';
+  exportSuccessView.style.display = 'none';
+  exportErrorEl.style.display = 'none';
+  exportOverlay.style.display = 'flex';
+  loadJsPDF().catch(() => {}); // warm the PDF engine while the visitor fills in the form
+}
+function closeExportModal() {
+  exportOverlay.style.display = 'none';
+}
+exportPdfBtn.addEventListener('click', () => {
+  const isCompare = compareModeSection.style.display !== 'none';
+  if (isCompare ? !compareResultsData.some(r => r.ok) : !lastSingleStats) {
+    alert(isCompare ? 'Compare at least one route before exporting.' : 'Generate and calculate a route before exporting.');
+    return;
+  }
+  openExportModal();
+});
+document.getElementById('close-export-btn').addEventListener('click', closeExportModal);
+document.getElementById('close-export-success-btn').addEventListener('click', closeExportModal);
+exportOverlay.addEventListener('click', (e) => { if (e.target === exportOverlay) closeExportModal(); });
+document.getElementById('retry-download-btn').addEventListener('click', () => {
+  if (lastLeadInfo) generatePDF(lastLeadInfo).catch(showPdfError);
+});
+
+function showPdfError() {
+  exportFormView.style.display = '';
+  exportSuccessView.style.display = 'none';
+  exportErrorEl.textContent = 'Something went wrong generating the PDF. Please try again.';
+  exportErrorEl.style.display = 'block';
+}
+
+exportForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  exportErrorEl.style.display = 'none';
+
+  const name = document.getElementById('exp-name').value.trim();
+  const company = document.getElementById('exp-company').value.trim();
+  const position = document.getElementById('exp-position').value.trim();
+  const email = document.getElementById('exp-email').value.trim();
+  const consent = document.getElementById('exp-consent').checked;
+
+  if (!name || !email) { exportErrorEl.textContent = 'Please fill in your name and email.'; exportErrorEl.style.display = 'block'; return; }
+  if (!consent) { exportErrorEl.textContent = 'Please tick the box to confirm you\'re happy for us to use your details, or close this window to keep just viewing your result.'; exportErrorEl.style.display = 'block'; return; }
+
+  const lead = { name, company, position, email };
+  lastLeadInfo = lead;
+  const btn = exportSubmitBtn;
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+
+  const formData = new FormData();
+  formData.append('access_key', WEB3FORMS_KEY);
+  formData.append('subject', 'Routing Tool PDF export — ' + name + (company ? ' (' + company + ')' : ''));
+  formData.append('from_name', 'CableTrack Routing Tool');
+  formData.append('name', name);
+  formData.append('company', company);
+  formData.append('position', position);
+  formData.append('email', email);
+  formData.append('message', exportContext === 'compare'
+    ? `Route comparison export (${compareResultsData.filter(r => r.ok).length} routes)`
+    : `Route export: ${originInput.value || 'start'} -> ${destInput.value || 'destination'}`);
+
+  // Lead capture (Web3Forms) and PDF generation are independent -- a failure
+  // in one shouldn't block the other. The visitor always gets their PDF if
+  // generation succeeds.
+  fetch('https://api.web3forms.com/submit', { method: 'POST', body: formData }).catch(() => {});
+
+  generatePDF(lead)
+    .then(() => {
+      exportFormView.style.display = 'none';
+      exportSuccessView.style.display = '';
+    })
+    .catch(showPdfError)
+    .finally(() => {
+      btn.disabled = false;
+      btn.textContent = 'Generate My PDF Report';
+    });
+});
+
+// Brand colours -- matches the app's own --navy/--accent/--muted/--text
+// rather than the darker theme used on the main cabletrack.co.uk site, so
+// the export matches what's actually on screen here.
+const PDF_NAVY = [11, 45, 77];
+const PDF_ACCENT = [31, 143, 206];
+const PDF_TEXT = [28, 42, 51];
+const PDF_MUTED = [107, 124, 136];
+const PDF_ROW_FILL = [244, 246, 248];
+
+function drawPdfHexMark(doc, cx, cy, r) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const ang = Math.PI / 180 * (60 * i - 90);
+    pts.push([cx + r * Math.cos(ang), cy + r * Math.sin(ang)]);
+  }
+  doc.setDrawColor(...PDF_ACCENT);
+  doc.setLineWidth(0.6);
+  for (let i = 0; i < 6; i++) {
+    const p1 = pts[i], p2 = pts[(i + 1) % 6];
+    doc.line(p1[0], p1[1], p2[0], p2[1]);
+  }
+}
+
+async function generatePDF(lead) {
+  await loadJsPDF();
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const marginX = 16;
+  const contentW = pageW - marginX * 2;
+  let pageNum = 1;
+  const reportTitle = exportContext === 'compare' ? 'Route Comparison Report' : 'Sea Route Report';
+
+  function drawHeader() {
+    doc.setFillColor(...PDF_NAVY);
+    doc.rect(0, 0, pageW, 26, 'F');
+    drawPdfHexMark(doc, marginX + 5, 13, 7);
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.text('CableTrack', marginX + 15, 14.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(...PDF_ACCENT);
+    doc.text(reportTitle, pageW - marginX, 10, { align: 'right' });
+    doc.setTextColor(200, 210, 216);
+    doc.setFontSize(8);
+    doc.text('Generated ' + new Date().toLocaleString(), pageW - marginX, 15.5, { align: 'right' });
+  }
+  function drawFooter() {
+    doc.setDrawColor(220, 224, 228);
+    doc.setLineWidth(0.2);
+    doc.line(marginX, pageH - 14, pageW - marginX, pageH - 14);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(...PDF_MUTED);
+    doc.text('Planning/estimation only, not for navigation -- verify against an official passage plan before relying on these figures.', marginX, pageH - 10, { maxWidth: contentW });
+    doc.text('cabletrack.co.uk  ·  hello@cabletrack.co.uk', marginX, pageH - 5.5);
+    doc.text('Page ' + pageNum, pageW - marginX, pageH - 5.5, { align: 'right' });
+  }
+  function newPage() {
+    drawFooter();
+    doc.addPage();
+    pageNum++;
+    drawHeader();
+    return 34;
+  }
+  function checkBreak(y, needed) {
+    if (y + needed > pageH - 18) return newPage();
+    return y;
+  }
+
+  drawHeader();
+  let y = 34;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...PDF_TEXT);
+  let preparedFor = 'Prepared for: ' + lead.name;
+  if (lead.company) preparedFor += ' — ' + lead.company;
+  if (lead.position) preparedFor += ' (' + lead.position + ')';
+  doc.text(preparedFor, marginX, y);
+  y += 9;
+
+  if (exportContext === 'compare') {
+    y = buildComparePdfBody(doc, { marginX, contentW, y, checkBreak });
+  } else {
+    y = buildSinglePdfBody(doc, { marginX, contentW, y, checkBreak });
+  }
+
+  drawFooter();
+  const who = (lead.company || lead.name || 'export').replace(/[^a-z0-9]+/gi, '_');
+  const filename = exportContext === 'compare'
+    ? 'CableTrack_RouteComparison_' + who + '.pdf'
+    : 'CableTrack_Route_' + who + '.pdf';
+  doc.save(filename);
+}
+
+function buildSinglePdfBody(doc, ctx) {
+  const { marginX, contentW } = ctx;
+  let y = ctx.y;
+  const s = lastSingleStats;
+  const meta = lastRouteMeta || {};
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(...PDF_TEXT);
+  doc.text(`${originInput.value || 'Start point'}  →  ${destInput.value || 'Destination'}`, marginX, y);
+  y += 8;
+
+  // Key result boxes
+  const boxW = (contentW - 6) / 2;
+  const boxH = 22;
+  doc.setFillColor(...PDF_NAVY);
+  doc.roundedRect(marginX, y, boxW, boxH, 2, 2, 'F');
+  doc.roundedRect(marginX + boxW + 6, y, boxW, boxH, 2, 2, 'F');
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(200, 210, 216);
+  doc.text('EFFECTIVE DISTANCE', marginX + 4, y + 7);
+  doc.text('PLANNING TRANSIT', marginX + boxW + 10, y + 7);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.setTextColor(...PDF_ACCENT);
+  doc.text(s.effective_distance_nm + ' nm', marginX + 4, y + 16);
+  doc.text(s.planning_transit_hm + ' (' + s.planning_transit_days + ' d)', marginX + boxW + 10, y + 16);
+  y += boxH + 8;
+
+  // Route notes
+  const notes = [];
+  if (meta.passages_used && meta.passages_used.length) notes.push('Route uses: ' + meta.passages_used.join(', '));
+  if (meta.coastal_hugging_fixed) notes.push('Adjusted to keep clear water off headlands where the raw route hugged the coast.');
+  if (meta.network_gap_fixed) notes.push('Shortened a stretch where the routing engine\'s network detoured a long way round a gap in its own shipping-lane data.');
+  if (notes.length) {
+    y = ctx.checkBreak(y, 6 * notes.length + 4);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(...PDF_ACCENT);
+    notes.forEach(n => { doc.text('• ' + n, marginX, y, { maxWidth: contentW }); y += 6; });
+    y += 2;
+  }
+  if (meta.gapNotes && meta.gapNotes.length) {
+    y = ctx.checkBreak(y, 14);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(122, 84, 16);
+    doc.text('⚠ Approach not fully resolved at the ' + meta.gapNotes.join(' and ') + ' -- the last stretch is a straight-line estimate, not a routed path.', marginX, y, { maxWidth: contentW });
+    y += 10;
+  }
+
+  // Breakdown table
+  y = ctx.checkBreak(y, 14);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(...PDF_ACCENT);
+  doc.text('COST & TRANSIT BREAKDOWN', marginX, y);
+  y += 6;
+
+  const rows = [
+    ['Route (geometric)', s.total_distance_nm + ' nm'],
+    [`Effective distance (+${s.distance_allowance_pct}% track allowance)`, s.effective_distance_nm + ' nm'],
+    ['Open-sea', `${s.zones.open_sea.distance_nm} nm @ ${s.zones.open_sea.effective_speed_kn} kn`],
+    ['Approach', `${s.zones.approach.distance_nm} nm @ ${s.zones.approach.effective_speed_kn} kn`],
+    ['Port', `${s.zones.port.distance_nm} nm @ ${s.zones.port.effective_speed_kn} kn`],
+    ['Current factor', (s.current_factor_pct >= 0 ? '+' : '') + s.current_factor_pct + '% (speed)'],
+    ['Transit', s.transit_hm],
+    ['Weather allowance', s.weather_allowance_pct + '%'],
+    ['Planning transit', `${s.planning_transit_hm} (${s.planning_transit_days} days)`],
+    ['Fuel burn', s.fuel_burn_t_per_day + ' t/day'],
+    ['Fuel required', s.fuel_required_t + ' t'],
+    ['Fuel price', '£' + s.fuel_price_per_t + '/t'],
+    ['Fuel cost', '£' + s.fuel_cost.toLocaleString()],
+    ['Vessel day rate', '£' + s.vessel_day_rate.toLocaleString() + '/day'],
+    ['Vessel cost', '£' + s.vessel_cost.toLocaleString()],
+  ];
+  if (s.trips > 1) {
+    rows.push(['Trips', '×' + s.trips]);
+    rows.push(['Cost per trip', '£' + s.cost_per_trip.toLocaleString()]);
+  }
+  if (s.additional_cost) {
+    rows.push(['Additional cost' + (s.additional_cost_note ? ' (' + s.additional_cost_note + ')' : ''), '£' + s.additional_cost.toLocaleString()]);
+  }
+
+  doc.setFontSize(8.5);
+  rows.forEach((r, i) => {
+    y = ctx.checkBreak(y, 7);
+    if (i % 2 === 0) {
+      doc.setFillColor(...PDF_ROW_FILL);
+      doc.rect(marginX, y - 3.6, contentW, 6, 'F');
+    }
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...PDF_MUTED);
+    doc.text(r[0], marginX + 4, y, { maxWidth: contentW - 60 });
+    doc.setTextColor(...PDF_TEXT);
+    doc.setFont('helvetica', 'bold');
+    doc.text(r[1], marginX + contentW - 4, y, { align: 'right' });
+    y += 6;
+  });
+
+  y = ctx.checkBreak(y, 10);
+  doc.setDrawColor(...PDF_ACCENT);
+  doc.setLineWidth(0.4);
+  doc.line(marginX, y - 2, marginX + contentW, y - 2);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...PDF_ACCENT);
+  doc.text('Total cost', marginX + 4, y + 3);
+  doc.text('£' + s.total_cost.toLocaleString(), marginX + contentW - 4, y + 3, { align: 'right' });
+  return y + 10;
+}
+
+function buildComparePdfBody(doc, ctx) {
+  const { marginX, contentW } = ctx;
+  let y = ctx.y;
+  const okRows = compareResultsData.filter(r => r.ok);
+  const errRows = compareResultsData.filter(r => !r.ok);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(...PDF_MUTED);
+  const summary = errRows.length
+    ? `${okRows.length} of ${compareResultsData.length} routes calculated (${errRows.length} failed).`
+    : `${okRows.length} route${okRows.length > 1 ? 's' : ''} compared.`;
+  doc.text(summary, marginX, y);
+  y += 9;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(...PDF_ACCENT);
+  doc.text('COMPARISON', marginX, y);
+  y += 6;
+
+  const colDist = marginX + contentW - 92;
+  const colTransit = marginX + contentW - 66;
+  const colCost = marginX + contentW - 34;
+  const colPct = marginX + contentW - 2;
+  doc.setFontSize(7.5);
+  doc.setTextColor(...PDF_MUTED);
+  doc.text('ROUTE', marginX + 5, y);
+  doc.text('DISTANCE', colDist, y, { align: 'right' });
+  doc.text('TRANSIT', colTransit, y, { align: 'right' });
+  doc.text('TOTAL COST', colCost, y, { align: 'right' });
+  doc.text('VS ROUTE 1', colPct, y, { align: 'right' });
+  y += 6;
+
+  okRows.forEach((r, i) => {
+    y = ctx.checkBreak(y, 7);
+    if (i % 2 === 0) {
+      doc.setFillColor(...PDF_ROW_FILL);
+      doc.rect(marginX, y - 3.6, contentW, 6, 'F');
+    }
+    const rgb = hexToRgbPdf(r.color);
+    doc.setFillColor(...rgb);
+    doc.rect(marginX + 1, y - 2, 2, 2, 'F');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(...PDF_TEXT);
+    doc.text(r.label, marginX + 5, y, { maxWidth: contentW - 100 });
+    doc.text(r.distance_nm + ' nm', colDist, y, { align: 'right' });
+    doc.text(r.transit_hm, colTransit, y, { align: 'right' });
+    doc.text('£' + r.total_cost.toLocaleString(), colCost, y, { align: 'right' });
+    doc.text(r.is_baseline ? 'Baseline' : `${r.cost_diff_pct >= 0 ? '+' : ''}${r.cost_diff_pct.toFixed(1)}%`, colPct, y, { align: 'right' });
+    y += 6;
+  });
+
+  if (errRows.length) {
+    y += 3;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(192, 57, 43);
+    errRows.forEach(r => {
+      y = ctx.checkBreak(y, 6);
+      doc.text('✕ ' + r.label + ' — ' + r.error, marginX + 5, y, { maxWidth: contentW - 10 });
+      y += 5.5;
+    });
+  }
+  return y + 6;
+}
+
+function hexToRgbPdf(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : PDF_ACCENT;
+}
 </script>
 </body>
 </html>
