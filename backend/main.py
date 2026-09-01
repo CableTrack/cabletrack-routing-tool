@@ -23,6 +23,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import coastal
+
 app = FastAPI(title="CableTrack Routing Tool Prototype")
 
 # Scoped to the main CableTrack site only, GET only -- lets the route-planner
@@ -89,18 +91,45 @@ def search_ports(q: str = "", limit: int = 12):
 class RouteRequest(BaseModel):
     origin: list[float]       # [lon, lat]
     destination: list[float]  # [lon, lat]
+    min_clearance_nm: float = 3.0   # 0 disables the coastal-clearance pass below
 
 
 @app.post("/api/route")
 def get_route(req: RouteRequest):
     route = sr.searoute(req.origin, req.destination, units="naut", return_passages=True)
+    coords = route.geometry.coordinates
+
+    # searoute-py's network nodes can sit right at the coastline -- measured
+    # as close as 0.06 nm off North Wales, well inside what a real vessel
+    # would plan around a headland. Re-route any interior stretch tighter
+    # than min_clearance_nm through a local buffered search; anything that
+    # was already fine is left untouched. See coastal.py for the full
+    # writeup (including why this is a bundled precomputed land grid rather
+    # than a runtime dependency on the raw dataset -- that one's ~890MB in
+    # RAM, more than a free-tier instance has to spare).
+    coastal_hugging_fixed = False
+    if req.min_clearance_nm > 0:
+        coords, coastal_hugging_fixed = coastal.apply_coastal_clearance(
+            coords, clearance_nm=req.min_clearance_nm
+        )
+
+    # searoute-py's own reported length is for its original (uncorrected)
+    # path -- recompute when the coastal pass actually changed the geometry.
+    if coastal_hugging_fixed:
+        distance_nm = sum(
+            coastal.haversine_nm(coords[i], coords[i + 1]) for i in range(len(coords) - 1)
+        )
+    else:
+        distance_nm = route.properties["length"]
+
     return {
-        "coordinates": route.geometry.coordinates,
-        "distance_nm": route.properties["length"],
+        "coordinates": coords,
+        "distance_nm": distance_nm,
         # searoute-py's own key here is "traversed_passages", not "passages" --
         # this was silently returning None before, so the "Route uses: ..."
         # note never actually showed anything.
         "passages_used": route.properties.get("traversed_passages"),
+        "coastal_hugging_fixed": coastal_hugging_fixed,
     }
 
 
