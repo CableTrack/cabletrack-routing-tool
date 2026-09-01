@@ -13,13 +13,16 @@ Then open http://localhost:8000 in a browser.
 import json
 import math
 import os
+import secrets
 import time
 import uuid
 
 import httpx
 import searoute as sr
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -178,9 +181,9 @@ def get_route(req: RouteRequest):
 # IMPORTANT: sr.setup_M must be called positionally (sr.setup_M("networkx")),
 # never as a keyword (sr.setup_M(backend="networkx")) -- functools.lru_cache
 # treats those as two different cache keys, so a keyword call here would
-# build and mutate an entirely separate, unused Marnet graph instead of the
-# one /api/route actually reads (this was the original bug that made the
-# first version of this feature silently do nothing).
+# build and mutate an entirely separate, unused Marnet graph instance instead
+# of the one /api/route actually reads (this was the original bug that made
+# the first version of this feature silently do nothing).
 # ---------------------------------------------------------------------------
 _active_barriers = {}  # id -> {"start": [lon,lat], "end": [lon,lat], "edges": [(u, v, orig_edge_data_dict), ...]}
 
@@ -539,6 +542,43 @@ def get_windfarms():
     except (FileNotFoundError, json.JSONDecodeError):
         return {"error": "Windfarm data hasn't been loaded on this server yet.", "windfarms": []}
     return {"windfarms": windfarms, "cached": True}
+
+
+# ---------------------------------------------------------------------------
+# /cbra-demo -- password-gated CBRA (Cable Burial Risk Assessment) demo
+# dashboard. Not part of the public routing tool -- a separate, self-
+# contained HTML file (all data/charts embedded, no external deps besides
+# basemap tiles) linked from a "CBRA Demo Dashboard" item on the main site's
+# Tools nav. Deliberately kept OUTSIDE the static/ directory below so the
+# StaticFiles mount can never serve it unauthenticated -- the only way to
+# reach it is through this route, which requires HTTP Basic Auth first.
+#
+# Credentials live in Render env vars (CBRA_DEMO_USER / CBRA_DEMO_PASS),
+# never in this public repo. secrets.compare_digest is used for both the
+# username and password comparison to avoid leaking their length/contents
+# via response-timing side channels.
+# ---------------------------------------------------------------------------
+_cbra_demo_security = HTTPBasic()
+CBRA_DEMO_USER = os.environ.get("CBRA_DEMO_USER", "")
+CBRA_DEMO_PASS = os.environ.get("CBRA_DEMO_PASS", "")
+_CBRA_DEMO_PATH = os.path.join(os.path.dirname(__file__), "cbra_demo_dashboard.html")
+
+
+def _verify_cbra_demo_auth(credentials: HTTPBasicCredentials = Depends(_cbra_demo_security)):
+    user_ok = bool(CBRA_DEMO_USER) and secrets.compare_digest(credentials.username, CBRA_DEMO_USER)
+    pass_ok = bool(CBRA_DEMO_PASS) and secrets.compare_digest(credentials.password, CBRA_DEMO_PASS)
+    if not (user_ok and pass_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+
+@app.get("/cbra-demo")
+def cbra_demo_dashboard(_: str = Depends(_verify_cbra_demo_auth)):
+    return FileResponse(_CBRA_DEMO_PATH, media_type="text/html")
 
 
 # ---------------------------------------------------------------------------
