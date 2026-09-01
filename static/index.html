@@ -849,6 +849,9 @@ generateBtn.addEventListener('click', async () => {
     if (data.coastal_hugging_fixed) {
       routeNotes.push('Adjusted to keep clear water off headlands where the raw route hugged the coast.');
     }
+    if (data.network_gap_fixed) {
+      routeNotes.push('Shortened a stretch where the routing engine\'s network detoured a long way round a gap in its own shipping-lane data.');
+    }
     if (routeNotes.length) {
       passageNote.style.display = 'block';
       passageNote.textContent = routeNotes.join(' — ');
