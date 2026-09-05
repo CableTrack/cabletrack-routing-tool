@@ -582,6 +582,37 @@ def cbra_demo_dashboard(_: str = Depends(_verify_cbra_demo_auth)):
 
 
 # ---------------------------------------------------------------------------
+# /AIS_Data/{filename} -- companion data for the CBRA dashboard's "Vessel
+# Traffic" section.
+#
+# The dashboard doesn't embed its AIS playback data in the main HTML -- it's
+# a separate ~370KB file that the dashboard's own JS lazy-loads on first use
+# via a dynamically-created <script src="AIS_Data/..."> tag. Because the
+# dashboard is served at /cbra-demo (no trailing slash) rather than as a
+# static file with a true sibling folder, that relative path resolves
+# against the domain root, i.e. exactly /AIS_Data/<filename> -- so this
+# route has to live at that literal path, not under /cbra-demo/.
+#
+# Gated behind the same HTTP Basic Auth as the dashboard itself (reusing
+# _verify_cbra_demo_auth) so the data is no more exposed than the dashboard
+# HTML is. filename is restricted to a fixed on-disk directory with a path-
+# traversal guard, same pattern as the windfarms/cbra-demo file serving
+# above.
+# ---------------------------------------------------------------------------
+_CBRA_DEMO_AIS_DIR = os.path.join(os.path.dirname(__file__), "cbra_demo_ais_data")
+
+
+@app.get("/AIS_Data/{filename}")
+def cbra_demo_ais_data(filename: str, _: str = Depends(_verify_cbra_demo_auth)):
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=404)
+    file_path = os.path.join(_CBRA_DEMO_AIS_DIR, filename)
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404)
+    return FileResponse(file_path, media_type="application/javascript")
+
+
+# ---------------------------------------------------------------------------
 # Serve the frontend
 # ---------------------------------------------------------------------------
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
