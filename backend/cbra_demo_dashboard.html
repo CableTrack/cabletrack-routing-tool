@@ -1988,6 +1988,21 @@ function wireZoomPan() {
   document.getElementById("zoom-in").addEventListener("click", () => zoomBy(0.8));
   document.getElementById("zoom-out").addEventListener("click", () => zoomBy(1.25));
   document.getElementById("zoom-reset").addEventListener("click", () => resetView());
+
+  // Arrow-button panning -- same effect as a click-and-drag on the SVG
+  // (see the mousemove handler above), just expressed as a fixed fraction
+  // of the current view per click. Added because click-drag panning is
+  // unreliable on iPad/touch (no native mousedown/mousemove there), so a
+  // visitor on a tablet had no way to pan the map at all.
+  function panBy(dxFrac, dyFrac) {
+    const v = state.view;
+    state.view = { ...v, x: v.x + dxFrac * v.w, y: v.y + dyFrac * v.h };
+    applyView(state.view);
+  }
+  document.getElementById("pan-up").addEventListener("click", () => panBy(0, -0.2));
+  document.getElementById("pan-down").addEventListener("click", () => panBy(0, 0.2));
+  document.getElementById("pan-left").addEventListener("click", () => panBy(-0.2, 0));
+  document.getElementById("pan-right").addEventListener("click", () => panBy(0.2, 0));
 }
 
 // ---------------------------------------------------------------
@@ -3720,6 +3735,23 @@ function vtWireMapInteraction() {
   container.addEventListener("wheel", (e) => { e.preventDefault(); vtZoomBy(e.deltaY > 0 ? -1 : 1); }, { passive: false });
   document.getElementById("vt-zoom-in").addEventListener("click", () => vtZoomBy(1));
   document.getElementById("vt-zoom-out").addEventListener("click", () => vtZoomBy(-1));
+  // Arrow-button panning -- same underlying math as the click-and-drag
+  // handler above, just a fixed step per click. Added for the same reason
+  // as the main map's pan-controls: click-drag doesn't work on iPad.
+  function vtPanBy(dxFrac, dyFrac) {
+    const container = document.getElementById("vt-map-container");
+    const w = container.clientWidth || 800, h = container.clientHeight || 560;
+    const [cx, cy] = vtLonLatToPx(vtState.center.lon, vtState.center.lat);
+    vtState.center = {
+      lon: pxToLonAtZoom(cx + dxFrac * w, vtState.zoom),
+      lat: pxToLatAtZoom(cy + dyFrac * h, vtState.zoom),
+    };
+    vtRenderAll();
+  }
+  document.getElementById("vt-pan-up").addEventListener("click", () => vtPanBy(0, -0.2));
+  document.getElementById("vt-pan-down").addEventListener("click", () => vtPanBy(0, 0.2));
+  document.getElementById("vt-pan-left").addEventListener("click", () => vtPanBy(-0.2, 0));
+  document.getElementById("vt-pan-right").addEventListener("click", () => vtPanBy(0.2, 0));
   window.addEventListener("resize", () => {
     if (document.getElementById("vessel-traffic-page").style.display !== "none") vtRenderAll();
   });
@@ -4356,6 +4388,19 @@ document.addEventListener("DOMContentLoaded", () => {
     width: 30px; height: 30px; border-radius: 6px; border: 1px solid var(--color-border); background: #fff;
     font-size: 16px; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
   }
+  #vt-pan-controls {
+    position: absolute; top: 10px; right: 48px;
+    display: grid; grid-template-columns: repeat(3, 30px); grid-template-rows: repeat(3, 30px); gap: 4px; z-index: 5;
+  }
+  #vt-pan-controls button {
+    width: 30px; height: 30px; border-radius: 6px; border: 1px solid var(--color-border); background: #fff;
+    font-size: 14px; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    display: flex; align-items: center; justify-content: center; padding: 0;
+  }
+  #vt-pan-up { grid-column: 2; grid-row: 1; }
+  #vt-pan-left { grid-column: 1; grid-row: 2; }
+  #vt-pan-right { grid-column: 3; grid-row: 2; }
+  #vt-pan-down { grid-column: 2; grid-row: 3; }
   #vt-legend {
     position: absolute; bottom: 10px; left: 10px; background: rgba(255,255,255,0.92); border-radius: 8px;
     padding: 8px 10px; font-size: 10.5px; max-width: 210px; max-height: 260px; overflow-y: auto;
@@ -4414,6 +4459,20 @@ document.addEventListener("DOMContentLoaded", () => {
     background: #fff; font-size: 16px; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
   }
   #zoom-controls button:hover { background: var(--color-bg); }
+  #pan-controls {
+    position: absolute; top: 14px; right: 52px;
+    display: grid; grid-template-columns: repeat(3, 30px); grid-template-rows: repeat(3, 30px); gap: 4px;
+  }
+  #pan-controls button {
+    width: 30px; height: 30px; border-radius: 6px; border: 1px solid var(--color-border);
+    background: #fff; font-size: 14px; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    display: flex; align-items: center; justify-content: center; padding: 0;
+  }
+  #pan-controls button:hover { background: var(--color-bg); }
+  #pan-up { grid-column: 2; grid-row: 1; }
+  #pan-left { grid-column: 1; grid-row: 2; }
+  #pan-right { grid-column: 3; grid-row: 2; }
+  #pan-down { grid-column: 2; grid-row: 3; }
   #map-hint { position: absolute; bottom: 10px; left: 14px; font-size: 11px; color: #607072; background: rgba(255,255,255,0.75); padding: 3px 8px; border-radius: 5px; }
   #map-svg { cursor: grab; }
   #map-svg.panning { cursor: grabbing; }
@@ -4509,6 +4568,12 @@ document.addEventListener("DOMContentLoaded", () => {
         <button id="zoom-in" title="Zoom in">+</button>
         <button id="zoom-out" title="Zoom out">&minus;</button>
         <button id="zoom-reset" title="Reset view">&#8634;</button>
+      </div>
+      <div id="pan-controls">
+        <button id="pan-up" title="Pan up">&#8593;</button>
+        <button id="pan-left" title="Pan left">&#8592;</button>
+        <button id="pan-right" title="Pan right">&#8594;</button>
+        <button id="pan-down" title="Pan down">&#8595;</button>
       </div>
       <div id="location-inset" title="Satellite location inset">
         <svg id="location-inset-fallback-svg" viewBox="0 0 150 110" preserveAspectRatio="xMidYMid meet"></svg>
@@ -4694,6 +4759,12 @@ document.addEventListener("DOMContentLoaded", () => {
           <div id="vt-zoom-controls">
             <button id="vt-zoom-in" title="Zoom in">+</button>
             <button id="vt-zoom-out" title="Zoom out">&minus;</button>
+          </div>
+          <div id="vt-pan-controls">
+            <button id="vt-pan-up" title="Pan up">&#8593;</button>
+            <button id="vt-pan-left" title="Pan left">&#8592;</button>
+            <button id="vt-pan-right" title="Pan right">&#8594;</button>
+            <button id="vt-pan-down" title="Pan down">&#8595;</button>
           </div>
           <div id="vt-legend"></div>
           <div id="vt-loading" style="display:none;">Loading AIS data&hellip;</div>
@@ -6771,6 +6842,21 @@ function wireZoomPan() {
   document.getElementById("zoom-in").addEventListener("click", () => zoomBy(0.8));
   document.getElementById("zoom-out").addEventListener("click", () => zoomBy(1.25));
   document.getElementById("zoom-reset").addEventListener("click", () => resetView());
+
+  // Arrow-button panning -- same effect as a click-and-drag on the SVG
+  // (see the mousemove handler above), just expressed as a fixed fraction
+  // of the current view per click. Added because click-drag panning is
+  // unreliable on iPad/touch (no native mousedown/mousemove there), so a
+  // visitor on a tablet had no way to pan the map at all.
+  function panBy(dxFrac, dyFrac) {
+    const v = state.view;
+    state.view = { ...v, x: v.x + dxFrac * v.w, y: v.y + dyFrac * v.h };
+    applyView(state.view);
+  }
+  document.getElementById("pan-up").addEventListener("click", () => panBy(0, -0.2));
+  document.getElementById("pan-down").addEventListener("click", () => panBy(0, 0.2));
+  document.getElementById("pan-left").addEventListener("click", () => panBy(-0.2, 0));
+  document.getElementById("pan-right").addEventListener("click", () => panBy(0.2, 0));
 }
 
 // ---------------------------------------------------------------
@@ -8503,6 +8589,23 @@ function vtWireMapInteraction() {
   container.addEventListener("wheel", (e) => { e.preventDefault(); vtZoomBy(e.deltaY > 0 ? -1 : 1); }, { passive: false });
   document.getElementById("vt-zoom-in").addEventListener("click", () => vtZoomBy(1));
   document.getElementById("vt-zoom-out").addEventListener("click", () => vtZoomBy(-1));
+  // Arrow-button panning -- same underlying math as the click-and-drag
+  // handler above, just a fixed step per click. Added for the same reason
+  // as the main map's pan-controls: click-drag doesn't work on iPad.
+  function vtPanBy(dxFrac, dyFrac) {
+    const container = document.getElementById("vt-map-container");
+    const w = container.clientWidth || 800, h = container.clientHeight || 560;
+    const [cx, cy] = vtLonLatToPx(vtState.center.lon, vtState.center.lat);
+    vtState.center = {
+      lon: pxToLonAtZoom(cx + dxFrac * w, vtState.zoom),
+      lat: pxToLatAtZoom(cy + dyFrac * h, vtState.zoom),
+    };
+    vtRenderAll();
+  }
+  document.getElementById("vt-pan-up").addEventListener("click", () => vtPanBy(0, -0.2));
+  document.getElementById("vt-pan-down").addEventListener("click", () => vtPanBy(0, 0.2));
+  document.getElementById("vt-pan-left").addEventListener("click", () => vtPanBy(-0.2, 0));
+  document.getElementById("vt-pan-right").addEventListener("click", () => vtPanBy(0.2, 0));
   window.addEventListener("resize", () => {
     if (document.getElementById("vessel-traffic-page").style.display !== "none") vtRenderAll();
   });
