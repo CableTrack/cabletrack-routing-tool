@@ -3083,9 +3083,9 @@ const AIS_CATEGORY_ORDER = ["Cargo & Bulk", "Tanker", "Offshore & Support", "Fis
 const VT_TILE_URL_TEMPLATE = SATELLITE_TILE_URL_TEMPLATE; // same Esri World Imagery XYZ endpoint the Location inset already uses
 
 const vtState = {
-  everOpened: false, loading: false,
+  everOpened: false, everFit: false, loading: false,
   zoom: 8,
-  center: { lon: 1.05, lat: 53.55 }, // re-centred on the actual layout the first time the page opens, see showVesselTrafficPage
+  center: { lon: 1.05, lat: 53.55 }, // replaced by vtFitInitialView() once the AIS data has loaded, see showVesselTrafficPage
   simTime: 0,      // seconds since AIS_PLAYBACK_DATA.meta.windowStartIso — the playhead
   playing: true,
   isLive: true,    // "Live" = actively following the continuous replay loop; false once the user scrubs/rewinds/jumps to inspect a moment
@@ -3756,6 +3756,44 @@ function vtRenderLegend() {
   });
 }
 
+// Fits the initial Vessel Traffic view to comfortably show both the AIS
+// extract's real coverage area (meta.coverageHull) and the cable layout
+// site itself, the first time the page is opened after the AIS data has
+// loaded. Centring on the layout alone (the original approach) put the
+// view in the wrong place whenever the layout sits near an edge of the
+// AIS hull rather than near its middle -- e.g. a wind farm right at the
+// hull's southern tip meant almost the entire loaded week of vessel
+// traffic, and the dashed extent outline itself, fell outside the
+// viewport, which is what "everything is offset into a corner" was.
+function vtFitInitialView() {
+  const hull = window.AIS_PLAYBACK_DATA.meta.coverageHull;
+  let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+  hull.forEach(([lon, lat]) => {
+    minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon);
+    minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
+  });
+  // Also fold in the cable layout's own nodes so the site itself stays in
+  // view too, not just the AIS extent -- this is what the old node-
+  // centroid logic was trying (and failing) to achieve on its own.
+  Object.values(state.nodes).forEach((n) => {
+    minLon = Math.min(minLon, n.lon); maxLon = Math.max(maxLon, n.lon);
+    minLat = Math.min(minLat, n.lat); maxLat = Math.max(maxLat, n.lat);
+  });
+
+  vtState.center = { lon: (minLon + maxLon) / 2, lat: (minLat + maxLat) / 2 };
+
+  const container = document.getElementById("vt-map-container");
+  const W = container.clientWidth || 1000, H = container.clientHeight || 600;
+  const padFrac = 0.1; // margin so the dashed extent line isn't flush against the edge
+  let zoom = 5;
+  for (let z = 13; z >= 5; z--) {
+    const w = lonToPx(maxLon, z) - lonToPx(minLon, z);
+    const h = latToPx(minLat, z) - latToPx(maxLat, z); // y grows downward, so minLat -> larger y
+    if (w <= W * (1 - padFrac) && h <= H * (1 - padFrac)) { zoom = z; break; }
+  }
+  vtState.zoom = zoom;
+}
+
 function showVesselTrafficPage() {
   document.getElementById("content").style.display = "none";
   document.getElementById("analytics-page").style.display = "none";
@@ -3776,6 +3814,10 @@ function showVesselTrafficPage() {
 
   vtLoadDataIfNeeded(() => {
     const meta = window.AIS_PLAYBACK_DATA.meta;
+    if (!vtState.everFit) {
+      vtState.everFit = true;
+      vtFitInitialView();
+    }
     document.getElementById("vt-sub").textContent =
       meta.vesselCount + " real vessels, " + meta.area + ", " + fmtVtDate(meta.windowStartIso) + " – " + fmtVtDate(meta.windowEndIso) + " (replayed, not live)";
     document.getElementById("vt-disclaimer").textContent =
@@ -7824,9 +7866,9 @@ const AIS_CATEGORY_ORDER = ["Cargo & Bulk", "Tanker", "Offshore & Support", "Fis
 const VT_TILE_URL_TEMPLATE = SATELLITE_TILE_URL_TEMPLATE; // same Esri World Imagery XYZ endpoint the Location inset already uses
 
 const vtState = {
-  everOpened: false, loading: false,
+  everOpened: false, everFit: false, loading: false,
   zoom: 8,
-  center: { lon: 1.05, lat: 53.55 }, // re-centred on the actual layout the first time the page opens, see showVesselTrafficPage
+  center: { lon: 1.05, lat: 53.55 }, // replaced by vtFitInitialView() once the AIS data has loaded, see showVesselTrafficPage
   simTime: 0,      // seconds since AIS_PLAYBACK_DATA.meta.windowStartIso — the playhead
   playing: true,
   isLive: true,    // "Live" = actively following the continuous replay loop; false once the user scrubs/rewinds/jumps to inspect a moment
@@ -8497,6 +8539,44 @@ function vtRenderLegend() {
   });
 }
 
+// Fits the initial Vessel Traffic view to comfortably show both the AIS
+// extract's real coverage area (meta.coverageHull) and the cable layout
+// site itself, the first time the page is opened after the AIS data has
+// loaded. Centring on the layout alone (the original approach) put the
+// view in the wrong place whenever the layout sits near an edge of the
+// AIS hull rather than near its middle -- e.g. a wind farm right at the
+// hull's southern tip meant almost the entire loaded week of vessel
+// traffic, and the dashed extent outline itself, fell outside the
+// viewport, which is what "everything is offset into a corner" was.
+function vtFitInitialView() {
+  const hull = window.AIS_PLAYBACK_DATA.meta.coverageHull;
+  let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+  hull.forEach(([lon, lat]) => {
+    minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon);
+    minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
+  });
+  // Also fold in the cable layout's own nodes so the site itself stays in
+  // view too, not just the AIS extent -- this is what the old node-
+  // centroid logic was trying (and failing) to achieve on its own.
+  Object.values(state.nodes).forEach((n) => {
+    minLon = Math.min(minLon, n.lon); maxLon = Math.max(maxLon, n.lon);
+    minLat = Math.min(minLat, n.lat); maxLat = Math.max(maxLat, n.lat);
+  });
+
+  vtState.center = { lon: (minLon + maxLon) / 2, lat: (minLat + maxLat) / 2 };
+
+  const container = document.getElementById("vt-map-container");
+  const W = container.clientWidth || 1000, H = container.clientHeight || 600;
+  const padFrac = 0.1; // margin so the dashed extent line isn't flush against the edge
+  let zoom = 5;
+  for (let z = 13; z >= 5; z--) {
+    const w = lonToPx(maxLon, z) - lonToPx(minLon, z);
+    const h = latToPx(minLat, z) - latToPx(maxLat, z); // y grows downward, so minLat -> larger y
+    if (w <= W * (1 - padFrac) && h <= H * (1 - padFrac)) { zoom = z; break; }
+  }
+  vtState.zoom = zoom;
+}
+
 function showVesselTrafficPage() {
   document.getElementById("content").style.display = "none";
   document.getElementById("analytics-page").style.display = "none";
@@ -8517,6 +8597,10 @@ function showVesselTrafficPage() {
 
   vtLoadDataIfNeeded(() => {
     const meta = window.AIS_PLAYBACK_DATA.meta;
+    if (!vtState.everFit) {
+      vtState.everFit = true;
+      vtFitInitialView();
+    }
     document.getElementById("vt-sub").textContent =
       meta.vesselCount + " real vessels, " + meta.area + ", " + fmtVtDate(meta.windowStartIso) + " – " + fmtVtDate(meta.windowEndIso) + " (replayed, not live)";
     document.getElementById("vt-disclaimer").textContent =
